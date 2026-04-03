@@ -1,0 +1,2 @@
+# Loomq
+A revolutionary 0-algorithm delay queue built on Java 21 Virtual Threads. Ditch Redis ZSET and RabbitMQ DLX—handle millions of delayed tasks purely by Thread.sleep().

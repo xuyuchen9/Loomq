@@ -1,0 +1,41 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+wal:
+  data_dir: "./data/wal"
+  segment_size_mb: 64
+  flush_strategy: "batch"  # per_record, batch, async
+  batch_flush_interval_ms: 100
+  sync_on_write: false
+
+scheduler:
+  max_pending_tasks: 1000000
+
+dispatcher:
+  http_timeout_ms: 3000
+  max_concurrent_dispatches: 1000
+  connect_timeout_ms: 5000
+  read_timeout_ms: 3000
+
+retry:
+  initial_delay_ms: 1000
+  max_delay_ms: 60000
+  multiplier: 2.0
+  default_max_retry: 5
+
+recovery:
+  batch_size: 1000
+  sleep_ms: 10
+  concurrency_limit: 100
+  safe_mode: false
+
+security:
+  enabled: true
+  token_header: "X-Loomq-Token"
+  tokens:
+    - "dev-token-12345"
+
+logging:
+  level: INFO
+  format: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

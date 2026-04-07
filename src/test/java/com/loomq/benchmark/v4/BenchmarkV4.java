@@ -1,12 +1,12 @@
 package com.loomq.benchmark.v4;
 
-import com.loomq.entity.v3.EventTypeV3;
-import com.loomq.entity.v3.TaskStatusV3;
-import com.loomq.entity.v3.TaskV3;
+import com.loomq.entity.EventType;
+import com.loomq.entity.TaskStatus;
+import com.loomq.entity.Task;
 import com.loomq.retry.ExponentialBackoffPolicy;
 import com.loomq.retry.FixedIntervalPolicy;
 import com.loomq.retry.RetryPolicy;
-import com.loomq.store.v3.TaskStoreV3;
+import com.loomq.store.TaskStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,9 +86,9 @@ public class BenchmarkV4 {
      */
     private void warmup() {
         logger.info("----- JVM 预热 -----");
-        TaskStoreV3 store = new TaskStoreV3();
+        TaskStore store = new TaskStore();
         for (int i = 0; i < 10000; i++) {
-            TaskV3 task = createTestTask("warmup-" + i);
+            Task task = createTestTask("warmup-" + i);
             store.add(task);
         }
         store.clear();
@@ -103,14 +103,14 @@ public class BenchmarkV4 {
     private void taskCreationBenchmark(int count) {
         logger.info("----- 任务创建吞吐测试: {} 任务 -----", count);
 
-        TaskStoreV3 store = new TaskStoreV3();
+        TaskStore store = new TaskStore();
 
         // 统计
         long startTime = System.nanoTime();
         long startMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
         for (int i = 0; i < count; i++) {
-            TaskV3 task = createTestTask("create-" + i);
+            Task task = createTestTask("create-" + i);
             store.add(task);
         }
 
@@ -151,11 +151,11 @@ public class BenchmarkV4 {
         logger.info("");
         logger.info("----- 任务查询吞吐测试: {} 任务 -----", count);
 
-        TaskStoreV3 store = new TaskStoreV3();
+        TaskStore store = new TaskStore();
 
         // 准备数据
         for (int i = 0; i < count; i++) {
-            TaskV3 task = createTestTask("query-" + i);
+            Task task = createTestTask("query-" + i);
             task.setIdempotencyKey("idem-" + i);
             store.add(task);
         }
@@ -200,9 +200,9 @@ public class BenchmarkV4 {
         logger.info("----- 状态转换吞吐测试: {} 次 -----", count);
 
         // 创建生命周期列表
-        List<com.loomq.entity.v3.TaskLifecycleV3> lifecycles = new ArrayList<>();
+        List<com.loomq.entity.TaskLifecycle> lifecycles = new ArrayList<>();
         for (int i = 0; i < 1000; i++) {
-            lifecycles.add(new com.loomq.entity.v3.TaskLifecycleV3("state-" + i));
+            lifecycles.add(new com.loomq.entity.TaskLifecycle("state-" + i));
         }
 
         // 测试完整流转
@@ -244,12 +244,12 @@ public class BenchmarkV4 {
         logger.info("");
         logger.info("----- 幂等查询吞吐测试: {} 次 -----", count);
 
-        TaskStoreV3 store = new TaskStoreV3();
+        TaskStore store = new TaskStore();
 
         // 准备数据
         int taskCount = Math.min(count, 100_000);
         for (int i = 0; i < taskCount; i++) {
-            TaskV3 task = createTestTask("idem-test-" + i);
+            Task task = createTestTask("idem-test-" + i);
             task.setIdempotencyKey("key-" + i);
             store.add(task);
         }
@@ -355,10 +355,10 @@ public class BenchmarkV4 {
 
         long beforeMem = Runtime.getRuntime().totalMemory() - Runtime.getRuntime().freeMemory();
 
-        TaskStoreV3 store = new TaskStoreV3();
+        TaskStore store = new TaskStore();
 
         for (int i = 0; i < count; i++) {
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("mem-" + i)
                     .webhookUrl("https://example.com/webhook")
                     .bizKey("biz-" + i)
@@ -403,8 +403,8 @@ public class BenchmarkV4 {
 
     // ========== 辅助方法 ==========
 
-    private TaskV3 createTestTask(String taskId) {
-        return TaskV3.builder()
+    private Task createTestTask(String taskId) {
+        return Task.builder()
                 .taskId(taskId)
                 .webhookUrl("https://example.com/webhook")
                 .bizKey(taskId + "-biz")

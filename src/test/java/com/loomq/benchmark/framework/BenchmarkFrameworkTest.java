@@ -25,12 +25,12 @@ class BenchmarkFrameworkTest {
     @Test
     @DisplayName("内存态压测应生成有效报告")
     void testInMemoryBenchmark() {
-        // 使用小规模快速测试
+        // 使用小规模快速测试（CI环境需要足够任务量才能产生非零统计）
         BenchmarkBase.BenchmarkConfig config = BenchmarkBase.BenchmarkConfig.defaultConfig()
                 .withRepeatCount(2)
-                .withWarmupDuration(java.time.Duration.ofMillis(100));
+                .withWarmupDuration(java.time.Duration.ofMillis(500));
 
-        InMemoryBenchmark benchmark = new InMemoryBenchmark(1000, config);
+        InMemoryBenchmark benchmark = new InMemoryBenchmark(10000, config);
         BenchmarkBase.BenchmarkReport report = benchmark.execute();
 
         // 验证报告结构

@@ -1,0 +1,159 @@
+# LoomQ Docker Compose Configuration
+# Version: 0.4.5
+
+version: '3.8'
+
+services:
+  # Single node mode
+  loomq-single:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: loomq:0.4.5
+    container_name: loomq-single
+    ports:
+      - "8080:8080"
+    environment:
+      - LOOMQ_SERVER_HOST=0.0.0.0
+      - LOOMQ_SERVER_PORT=8080
+      - LOOMQ_WAL_DATA_DIR=/app/data/wal
+      - LOOMQ_WAL_FLUSH_STRATEGY=batch
+      - LOOMQ_SCHEDULER_MAX_PENDING=1000000
+      - LOOMQ_DISPATCHER_MAX_CONCURRENT=1000
+      - JVM_XMS=2g
+      - JVM_XMX=2g
+      - JVM_GC=ZGC
+      - JVM_GC_PAUSE=10
+      - LOOMQ_SHARD_INDEX=0
+      - LOOMQ_TOTAL_SHARDS=1
+    volumes:
+      - loomq-data:/app/data/wal
+      - ./config:/app/config:ro
+    networks:
+      - loomq-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+        reservations:
+          cpus: '2'
+          memory: 2G
+
+  # 2-node cluster mode
+  loomq-node0:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: loomq:0.4.5
+    container_name: loomq-node0
+    ports:
+      - "8080:8080"
+    environment:
+      - LOOMQ_SERVER_HOST=0.0.0.0
+      - LOOMQ_SERVER_PORT=8080
+      - LOOMQ_SHARD_INDEX=0
+      - LOOMQ_TOTAL_SHARDS=2
+      - LOOMQ_NODES=shard-0:loomq-node0:8080,shard-1:loomq-node1:8080
+      - JVM_XMS=2g
+      - JVM_XMX=2g
+      - JVM_GC=ZGC
+    volumes:
+      - loomq-node0-data:/app/data/wal
+    networks:
+      - loomq-cluster
+    restart: unless-stopped
+    profiles:
+      - cluster
+
+  loomq-node1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: loomq:0.4.5
+    container_name: loomq-node1
+    ports:
+      - "8081:8080"
+    environment:
+      - LOOMQ_SERVER_HOST=0.0.0.0
+      - LOOMQ_SERVER_PORT=8080
+      - LOOMQ_SHARD_INDEX=1
+      - LOOMQ_TOTAL_SHARDS=2
+      - LOOMQ_NODES=shard-0:loomq-node0:8080,shard-1:loomq-node1:8080
+      - JVM_XMS=2g
+      - JVM_XMX=2g
+      - JVM_GC=ZGC
+    volumes:
+      - loomq-node1-data:/app/data/wal
+    networks:
+      - loomq-cluster
+    restart: unless-stopped
+    profiles:
+      - cluster
+
+  # Prometheus monitoring
+  prometheus:
+    image: prom/prometheus:v2.50.0
+    container_name: loomq-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - loomq-network
+    profiles:
+      - monitoring
+      - full
+
+  # Grafana dashboard
+  grafana:
+    image: grafana/grafana:10.3.0
+    container_name: loomq-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=loomq123
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - loomq-network
+    profiles:
+      - monitoring
+      - full
+
+volumes:
+  loomq-data:
+    driver: local
+  loomq-node0-data:
+    driver: local
+  loomq-node1-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  loomq-network:
+    driver: bridge
+  loomq-cluster:
+    driver: bridge

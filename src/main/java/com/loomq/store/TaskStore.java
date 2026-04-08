@@ -1,7 +1,7 @@
 package com.loomq.store;
 
-import com.loomq.entity.Task;
 import com.loomq.entity.TaskStatus;
+import com.loomq.entity.Task;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -11,10 +11,22 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 /**
- * 任务存储
- * 内存索引，支持多种查询
+ * 任务存储 V3
+ *
+ * 内存索引存储，支持多种查询维度。
+ *
+ * 索引结构：
+ * - 主索引：taskId -> Task
+ * - 幂等索引：idempotencyKey -> taskId
+ * - 业务键索引：bizKey -> taskId
+ * - 时间索引：wakeTime -> Set<taskId>（TreeMap 实现）
+ * - 状态索引：status -> Set<taskId>
+ *
+ * @author loomq
+ * @since v0.4
  */
 public class TaskStore {
+
     private static final Logger logger = LoggerFactory.getLogger(TaskStore.class);
 
     // 主索引：taskId -> Task
@@ -26,8 +38,8 @@ public class TaskStore {
     // 业务键索引：bizKey -> taskId
     private final ConcurrentHashMap<String, String> taskIdByBizKey;
 
-    // 时间索引：使用跳表支持按触发时间查询
-    private final SkipListIndex timeIndex;
+    // 时间索引：wakeTime -> Set<taskId>
+    private final TreeMap<Long, Set<String>> timeIndex;
 
     // 状态索引：status -> Set<taskId>
     private final Map<TaskStatus, Set<String>> taskIdsByStatus;
@@ -36,11 +48,15 @@ public class TaskStore {
     private final AtomicLong totalTasks = new AtomicLong(0);
     private final AtomicLong version = new AtomicLong(0);
 
+    // 锁对象
+    private final Object timeIndexLock = new Object();
+    private final Object idempotencyLock = new Object();
+
     public TaskStore() {
         this.taskById = new ConcurrentHashMap<>();
         this.taskIdByIdempotencyKey = new ConcurrentHashMap<>();
         this.taskIdByBizKey = new ConcurrentHashMap<>();
-        this.timeIndex = new SkipListIndex();
+        this.timeIndex = new TreeMap<>();
         this.taskIdsByStatus = new ConcurrentHashMap<>();
 
         // 初始化状态索引
@@ -53,28 +69,31 @@ public class TaskStore {
 
     /**
      * 添加任务
+     *
+     * @return 是否添加成功
      */
-    public void add(Task task) {
+    public boolean add(Task task) {
         String taskId = task.getTaskId();
 
         // 添加到主索引
         Task existing = taskById.putIfAbsent(taskId, task);
         if (existing != null) {
-            throw new IllegalStateException("Task already exists: " + taskId);
+            logger.warn("Task already exists: {}", taskId);
+            return false;
         }
 
         // 添加幂等索引
-        if (task.getIdempotencyKey() != null) {
+        if (task.getIdempotencyKey() != null && !task.getIdempotencyKey().isEmpty()) {
             taskIdByIdempotencyKey.put(task.getIdempotencyKey(), taskId);
         }
 
         // 添加业务键索引
-        if (task.getBizKey() != null) {
+        if (task.getBizKey() != null && !task.getBizKey().isEmpty()) {
             taskIdByBizKey.put(task.getBizKey(), taskId);
         }
 
         // 添加时间索引
-        timeIndex.add(task.getTriggerTime(), taskId);
+        addToTimeIndex(task.getWakeTime(), taskId);
 
         // 添加状态索引
         taskIdsByStatus.get(task.getStatus()).add(taskId);
@@ -84,6 +103,69 @@ public class TaskStore {
         version.incrementAndGet();
 
         logger.debug("Added task: {}", taskId);
+        return true;
+    }
+
+    /**
+     * 带幂等检查的原子添加
+     *
+     * 确保幂等检查和任务添加在同一原子操作中完成，
+     * 避免并发场景下的 TOCTOU 竞态条件。
+     *
+     * @param task 要添加的任务
+     * @return 幂等结果：
+     *         - NOT_FOUND + 创建成功：新任务已创建
+     *         - ACTIVE_EXISTS：存在活跃任务，未创建新任务
+     *         - TERMINAL_EXISTS：存在终态任务，未创建新任务
+     */
+    public IdempotencyResult addWithIdempotency(Task task) {
+        String idempotencyKey = task.getIdempotencyKey();
+
+        // 无幂等键，直接添加
+        if (idempotencyKey == null || idempotencyKey.isEmpty()) {
+            boolean added = add(task);
+            return added ? IdempotencyResult.notFound() : IdempotencyResult.activeExists(task);
+        }
+
+        synchronized (idempotencyLock) {
+            // 1. 原子性检查幂等键
+            IdempotencyResult existing = getByIdempotencyKey(idempotencyKey);
+            if (existing.exists()) {
+                logger.debug("Task with idempotencyKey {} already exists: {}",
+                        idempotencyKey, existing.getTask().getTaskId());
+                return existing;
+            }
+
+            // 2. 添加到主索引
+            String taskId = task.getTaskId();
+            Task previous = taskById.putIfAbsent(taskId, task);
+            if (previous != null) {
+                // taskId 已存在（理论上不应该发生）
+                logger.warn("Task already exists by taskId: {}", taskId);
+                return IdempotencyResult.activeExists(previous);
+            }
+
+            // 3. 添加幂等索引（必须在同一同步块中）
+            taskIdByIdempotencyKey.put(idempotencyKey, taskId);
+
+            // 4. 添加业务键索引
+            if (task.getBizKey() != null && !task.getBizKey().isEmpty()) {
+                taskIdByBizKey.put(task.getBizKey(), taskId);
+            }
+
+            // 5. 添加时间索引
+            addToTimeIndex(task.getWakeTime(), taskId);
+
+            // 6. 添加状态索引
+            taskIdsByStatus.get(task.getStatus()).add(taskId);
+
+            // 7. 更新统计
+            totalTasks.incrementAndGet();
+            version.incrementAndGet();
+
+            logger.debug("Atomically added task: {} with idempotencyKey: {}", taskId, idempotencyKey);
+            return IdempotencyResult.notFound();
+        }
     }
 
     /**
@@ -97,19 +179,19 @@ public class TaskStore {
             throw new NoSuchElementException("Task not found: " + taskId);
         }
 
-        // 先保存旧值（因为 existing 和 task 可能是同一个对象）
+        // 保存旧值
         TaskStatus oldStatus = existing.getStatus();
-        long oldTriggerTime = existing.getTriggerTime();
+        long oldWakeTime = existing.getWakeTime();
         TaskStatus newStatus = task.getStatus();
-        long newTriggerTime = task.getTriggerTime();
+        long newWakeTime = task.getWakeTime();
 
         // 更新主索引
         taskById.put(taskId, task);
 
-        // 更新时间索引（如果触发时间变化）
-        if (oldTriggerTime != newTriggerTime) {
-            timeIndex.remove(oldTriggerTime, taskId);
-            timeIndex.add(newTriggerTime, taskId);
+        // 更新时间索引
+        if (oldWakeTime != newWakeTime) {
+            removeFromTimeIndex(oldWakeTime, taskId);
+            addToTimeIndex(newWakeTime, taskId);
         }
 
         // 更新状态索引
@@ -119,17 +201,13 @@ public class TaskStore {
         }
 
         version.incrementAndGet();
-
         logger.debug("Updated task: {}, status: {} -> {}", taskId, oldStatus, newStatus);
     }
 
     /**
-     * 更新任务状态（明确指定旧状态）
+     * 更新任务状态
      */
-    public void updateStatus(Task task, TaskStatus oldStatus) {
-        String taskId = task.getTaskId();
-        TaskStatus newStatus = task.getStatus();
-
+    public void updateStatus(String taskId, TaskStatus oldStatus, TaskStatus newStatus) {
         if (oldStatus != newStatus) {
             taskIdsByStatus.get(oldStatus).remove(taskId);
             taskIdsByStatus.get(newStatus).add(taskId);
@@ -158,7 +236,7 @@ public class TaskStore {
         }
 
         // 移除时间索引
-        timeIndex.remove(task.getTriggerTime(), taskId);
+        removeFromTimeIndex(task.getWakeTime(), taskId);
 
         // 移除状态索引
         taskIdsByStatus.get(task.getStatus()).remove(taskId);
@@ -181,44 +259,78 @@ public class TaskStore {
     }
 
     /**
-     * 根据幂等键获取任务
+     * 幂等查询（关键方法）
+     *
+     * 返回三种结果：
+     * 1. NOT_FOUND - 可以创建新任务
+     * 2. ACTIVE_EXISTS - 返回已存在的未终态任务
+     * 3. TERMINAL_EXISTS - 任务已终态，拒绝创建
      */
-    public Task getByIdempotencyKey(String idempotencyKey) {
+    public IdempotencyResult getByIdempotencyKey(String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isEmpty()) {
+            return IdempotencyResult.notFound();
+        }
+
         String taskId = taskIdByIdempotencyKey.get(idempotencyKey);
-        return taskId != null ? taskById.get(taskId) : null;
+        if (taskId == null) {
+            return IdempotencyResult.notFound();
+        }
+
+        Task task = taskById.get(taskId);
+        if (task == null) {
+            // 索引不一致，清理
+            taskIdByIdempotencyKey.remove(idempotencyKey);
+            return IdempotencyResult.notFound();
+        }
+
+        if (task.getStatus().isTerminal()) {
+            return IdempotencyResult.terminalExists(task);
+        }
+
+        return IdempotencyResult.activeExists(task);
     }
 
     /**
      * 根据业务键获取任务
      */
     public Task getByBizKey(String bizKey) {
+        if (bizKey == null || bizKey.isEmpty()) {
+            return null;
+        }
         String taskId = taskIdByBizKey.get(bizKey);
         return taskId != null ? taskById.get(taskId) : null;
     }
 
     /**
-     * 检查幂等键是否存在
+     * 检查 taskId 是否存在
      */
-    public boolean existsByIdempotencyKey(String idempotencyKey) {
-        return taskIdByIdempotencyKey.containsKey(idempotencyKey);
-    }
-
-    /**
-     * 检查业务键是否存在
-     */
-    public boolean existsByBizKey(String bizKey) {
-        return taskIdByBizKey.containsKey(bizKey);
+    public boolean exists(String taskId) {
+        return taskById.containsKey(taskId);
     }
 
     /**
      * 获取到期任务
+     *
+     * @param now 当前时间戳
+     * @return 到期任务列表
      */
     public List<Task> getDueTasks(long now) {
-        List<String> taskIds = timeIndex.queryRange(0, now);
+        List<String> taskIds = queryTimeRange(0, now);
         return taskIds.stream()
                 .map(taskById::get)
                 .filter(Objects::nonNull)
                 .filter(t -> t.getStatus() == TaskStatus.SCHEDULED || t.getStatus() == TaskStatus.RETRY_WAIT)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 获取指定状态的任务列表
+     */
+    public List<Task> getByStatus(TaskStatus status) {
+        Set<String> taskIds = taskIdsByStatus.get(status);
+        return taskIds.stream()
+                .map(taskById::get)
+                .filter(Objects::nonNull)
                 .collect(Collectors.toList());
     }
 
@@ -229,32 +341,16 @@ public class TaskStore {
         return taskIdsByStatus.get(status).size();
     }
 
-    /**
-     * 获取指定状态的任务ID集合
-     */
-    public Set<String> getTaskIdsByStatus(TaskStatus status) {
-        return Collections.unmodifiableSet(taskIdsByStatus.get(status));
-    }
-
     // ========== 统计 ==========
 
-    /**
-     * 获取总任务数
-     */
     public long size() {
         return totalTasks.get();
     }
 
-    /**
-     * 获取当前版本
-     */
     public long getVersion() {
         return version.get();
     }
 
-    /**
-     * 获取统计信息
-     */
     public Map<String, Long> getStats() {
         Map<String, Long> stats = new HashMap<>();
         stats.put("total", totalTasks.get());
@@ -266,54 +362,49 @@ public class TaskStore {
         return stats;
     }
 
-    /**
-     * 清空所有数据
-     */
     public void clear() {
         taskById.clear();
         taskIdByIdempotencyKey.clear();
         taskIdByBizKey.clear();
-        timeIndex.clear();
+        synchronized (timeIndexLock) {
+            timeIndex.clear();
+        }
         for (TaskStatus status : TaskStatus.values()) {
             taskIdsByStatus.get(status).clear();
         }
         totalTasks.set(0);
         version.incrementAndGet();
-
         logger.info("Task store cleared");
     }
 
-    /**
-     * 跳表索引（简化实现，用于按时间查询）
-     */
-    private static class SkipListIndex {
-        private final TreeMap<Long, Set<String>> index = new TreeMap<>();
+    // ========== 私有方法 ==========
 
-        public synchronized void add(long triggerTime, String taskId) {
-            index.computeIfAbsent(triggerTime, k -> ConcurrentHashMap.newKeySet()).add(taskId);
+    private void addToTimeIndex(long wakeTime, String taskId) {
+        synchronized (timeIndexLock) {
+            timeIndex.computeIfAbsent(wakeTime, k -> ConcurrentHashMap.newKeySet()).add(taskId);
         }
+    }
 
-        public synchronized void remove(long triggerTime, String taskId) {
-            Set<String> tasks = index.get(triggerTime);
+    private void removeFromTimeIndex(long wakeTime, String taskId) {
+        synchronized (timeIndexLock) {
+            Set<String> tasks = timeIndex.get(wakeTime);
             if (tasks != null) {
                 tasks.remove(taskId);
                 if (tasks.isEmpty()) {
-                    index.remove(triggerTime);
+                    timeIndex.remove(wakeTime);
                 }
             }
         }
+    }
 
-        public synchronized List<String> queryRange(long from, long to) {
+    private List<String> queryTimeRange(long from, long to) {
+        synchronized (timeIndexLock) {
             List<String> result = new ArrayList<>();
-            NavigableMap<Long, Set<String>> subMap = index.subMap(from, true, to, true);
+            NavigableMap<Long, Set<String>> subMap = timeIndex.subMap(from, true, to, true);
             for (Set<String> tasks : subMap.values()) {
                 result.addAll(tasks);
             }
             return result;
-        }
-
-        public synchronized void clear() {
-            index.clear();
         }
     }
 }

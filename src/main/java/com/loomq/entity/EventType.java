@@ -2,30 +2,33 @@ package com.loomq.entity;
 
 /**
  * 事件类型枚举
+ *
+ * 对齐需求文档定义的事件类型。
  */
 public enum EventType {
+
     /**
      * 任务创建
      */
     CREATE(1),
 
     /**
-     * 任务调度（进入调度队列）
+     * 进入调度
      */
     SCHEDULE(2),
 
     /**
-     * 任务到期
+     * 到期，准备执行
      */
-    DUE(3),
+    READY(3),
 
     /**
-     * 开始分发执行
+     * 开始执行
      */
     DISPATCH(4),
 
     /**
-     * 成功确认
+     * 执行成功
      */
     ACK(5),
 
@@ -35,29 +38,39 @@ public enum EventType {
     RETRY(6),
 
     /**
+     * 最终失败
+     */
+    FAIL(7),
+
+    /**
      * 任务取消
      */
-    CANCEL(7),
-
-    /**
-     * 任务修改
-     */
-    MODIFY(8),
-
-    /**
-     * 终态失败
-     */
-    FAIL(9),
+    CANCEL(8),
 
     /**
      * 任务过期
      */
-    EXPIRE(10),
+    EXPIRE(9),
+
+    /**
+     * 进入死信
+     */
+    DEAD_LETTER(10),
+
+    /**
+     * 任务修改
+     */
+    MODIFY(11),
 
     /**
      * 立即触发
      */
-    FIRE_NOW(11);
+    FIRE_NOW(12),
+
+    /**
+     * 检查点
+     */
+    CHECKPOINT(100);
 
     private final int code;
 

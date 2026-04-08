@@ -3,41 +3,32 @@ package com.loomq.entity;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 任务实体
+ *
+ * 完整任务数据模型，对齐需求文档字段定义。
  */
 public class Task {
+
+    // ========== 核心标识 ==========
+
     /**
      * 任务ID，全局唯一
      */
     private String taskId;
 
     /**
-     * 业务幂等键，同一业务实体只出现一次
+     * 业务键，用于业务层检索
      */
     private String bizKey;
 
     /**
-     * 请求级幂等键
+     * 幂等键，用于请求去重
      */
     private String idempotencyKey;
 
-    /**
-     * 任务状态
-     */
-    private volatile TaskStatus status;
-
-    /**
-     * 状态转换锁（用于 CAS 操作）
-     */
-    private final Object statusLock = new Object();
-
-    /**
-     * 触发时间戳（毫秒）
-     */
-    private long triggerTime;
+    // ========== 执行参数 ==========
 
     /**
      * 回调地址
@@ -59,10 +50,24 @@ public class Task {
      */
     private String payload;
 
+    // ========== 调度参数 ==========
+
     /**
-     * 最大重试次数
+     * 延迟时间（毫秒）
      */
-    private int maxRetry;
+    private long delay;
+
+    /**
+     * 计划触发时间（毫秒时间戳）
+     */
+    private long wakeTime;
+
+    /**
+     * 超时时间（毫秒）
+     */
+    private long timeout;
+
+    // ========== 重试参数 ==========
 
     /**
      * 当前重试次数
@@ -70,14 +75,23 @@ public class Task {
     private int retryCount;
 
     /**
-     * 超时时间（毫秒）
+     * 最大重试次数
      */
-    private long timeoutMs;
+    private int maxRetryCount;
+
+    // ========== 状态信息 ==========
+
+    /**
+     * 生命周期管理器
+     */
+    private TaskLifecycle lifecycle;
 
     /**
      * 乐观锁版本号
      */
     private long version;
+
+    // ========== 时间戳 ==========
 
     /**
      * 创建时间
@@ -94,25 +108,43 @@ public class Task {
      */
     private String lastError;
 
-    /**
-     * 唤醒时间 (运行时，不持久化)
-     * 用于计算 webhook 延迟和总延迟
-     */
-    private transient long wakeTime;
+    // ========== 集群相关 ==========
 
     /**
-     * 执行开始时间 (运行时，不持久化)
+     * 分片键
+     */
+    private String shardKey;
+
+    /**
+     * 分片ID
+     */
+    private int shardId;
+
+    /**
+     * 是否持久化
+     */
+    private boolean durable;
+
+    // ========== 运行时字段（不持久化） ==========
+
+    /**
+     * 实际唤醒时间
+     */
+    private transient long actualWakeTime;
+
+    /**
+     * 执行开始时间
      */
     private transient long executionStartTime;
 
     public Task() {
         this.headers = new HashMap<>();
         this.method = "POST";
-        this.maxRetry = 5;
+        this.maxRetryCount = 3;
         this.retryCount = 0;
-        this.timeoutMs = 3000;
+        this.timeout = 3000;
         this.version = 1;
-        this.status = TaskStatus.PENDING;
+        this.durable = true;
     }
 
     // ========== Builder Pattern ==========
@@ -136,16 +168,6 @@ public class Task {
 
         public Builder idempotencyKey(String idempotencyKey) {
             task.idempotencyKey = idempotencyKey;
-            return this;
-        }
-
-        public Builder status(TaskStatus status) {
-            task.status = status;
-            return this;
-        }
-
-        public Builder triggerTime(long triggerTime) {
-            task.triggerTime = triggerTime;
             return this;
         }
 
@@ -174,18 +196,28 @@ public class Task {
             return this;
         }
 
-        public Builder maxRetry(int maxRetry) {
-            task.maxRetry = maxRetry;
+        public Builder delay(long delay) {
+            task.delay = delay;
+            return this;
+        }
+
+        public Builder wakeTime(long wakeTime) {
+            task.wakeTime = wakeTime;
+            return this;
+        }
+
+        public Builder timeout(long timeout) {
+            task.timeout = timeout;
+            return this;
+        }
+
+        public Builder maxRetryCount(int maxRetryCount) {
+            task.maxRetryCount = maxRetryCount;
             return this;
         }
 
         public Builder retryCount(int retryCount) {
             task.retryCount = retryCount;
-            return this;
-        }
-
-        public Builder timeoutMs(long timeoutMs) {
-            task.timeoutMs = timeoutMs;
             return this;
         }
 
@@ -209,163 +241,102 @@ public class Task {
             return this;
         }
 
+        public Builder shardKey(String shardKey) {
+            task.shardKey = shardKey;
+            return this;
+        }
+
+        public Builder shardId(int shardId) {
+            task.shardId = shardId;
+            return this;
+        }
+
+        public Builder durable(boolean durable) {
+            task.durable = durable;
+            return this;
+        }
+
         public Task build() {
             Objects.requireNonNull(task.taskId, "taskId is required");
             Objects.requireNonNull(task.webhookUrl, "webhookUrl is required");
+
             if (task.createTime == 0) {
                 task.createTime = System.currentTimeMillis();
             }
             if (task.updateTime == 0) {
                 task.updateTime = task.createTime;
             }
+            if (task.wakeTime == 0 && task.delay > 0) {
+                task.wakeTime = task.createTime + task.delay;
+            }
+
+            // 创建生命周期管理器
+            task.lifecycle = new TaskLifecycle(task.taskId);
+
             return task;
         }
     }
 
-    // ========== Business Methods ==========
+    // ========== 状态代理方法 ==========
 
-    /**
-     * 增加重试次数
-     */
-    public void incrementRetry() {
-        this.retryCount++;
-        this.updateTime = System.currentTimeMillis();
+    public TaskStatus getStatus() {
+        return lifecycle != null ? lifecycle.getStatus() : TaskStatus.PENDING;
     }
 
-    /**
-     * 是否还能重试
-     */
+    public boolean transitionToScheduled() {
+        return lifecycle != null && lifecycle.transitionToScheduled();
+    }
+
+    public boolean transitionToReady() {
+        return lifecycle != null && lifecycle.transitionToReady();
+    }
+
+    public boolean transitionToRunning() {
+        return lifecycle != null && lifecycle.transitionToRunning();
+    }
+
+    public boolean transitionToSuccess() {
+        return lifecycle != null && lifecycle.transitionToSuccess();
+    }
+
+    public boolean transitionToRetryWait() {
+        return lifecycle != null && lifecycle.transitionToRetryWait(maxRetryCount);
+    }
+
+    public boolean transitionToFailed(String error) {
+        boolean result = lifecycle != null && lifecycle.transitionToFailed(error);
+        if (result) {
+            this.lastError = error;
+        }
+        return result;
+    }
+
+    public boolean transitionToDeadLetter(String error) {
+        boolean result = lifecycle != null && lifecycle.transitionToDeadLetter(error);
+        if (result) {
+            this.lastError = error;
+        }
+        return result;
+    }
+
+    public boolean cancel() {
+        return lifecycle != null && lifecycle.cancel();
+    }
+
+    public boolean expire() {
+        return lifecycle != null && lifecycle.expire();
+    }
+
     public boolean canRetry() {
-        return retryCount < maxRetry && !status.isTerminal();
+        return retryCount < maxRetryCount && !getStatus().isTerminal();
     }
 
-    /**
-     * 更新版本号
-     */
-    public void incrementVersion() {
-        this.version++;
-        this.updateTime = System.currentTimeMillis();
+    public boolean isTerminal() {
+        return getStatus().isTerminal();
     }
 
-    /**
-     * 设置错误并更新状态
-     */
-    public void setError(String error) {
-        this.lastError = error;
-        this.updateTime = System.currentTimeMillis();
-    }
-
-    // ========== 原子状态转换方法 ==========
-
-    /**
-     * 尝试转换状态（CAS 操作）
-     * 只有当前状态与期望状态匹配时才转换
-     *
-     * @param expectedStatus 期望的当前状态
-     * @param newStatus 新状态
-     * @return 是否转换成功
-     */
-    public boolean compareAndSetStatus(TaskStatus expectedStatus, TaskStatus newStatus) {
-        synchronized (statusLock) {
-            if (this.status == expectedStatus) {
-                this.status = newStatus;
-                this.updateTime = System.currentTimeMillis();
-                return true;
-            }
-            return false;
-        }
-    }
-
-    /**
-     * 尝试取消任务（原子操作）
-     * 只有在可取消状态下才能成功
-     *
-     * @return 是否取消成功
-     */
-    public boolean tryCancel() {
-        synchronized (statusLock) {
-            if (this.status.isCancellable()) {
-                this.status = TaskStatus.CANCELLED;
-                this.updateTime = System.currentTimeMillis();
-                return true;
-            }
-            return false;
-        }
-    }
-
-    /**
-     * 尝试开始执行（原子操作）
-     * 只有在 SCHEDULED 或 RETRY_WAIT 状态下才能开始执行
-     *
-     * @return 是否成功开始执行
-     */
-    public boolean tryStartExecution() {
-        synchronized (statusLock) {
-            if (this.status == TaskStatus.SCHEDULED ||
-                this.status == TaskStatus.RETRY_WAIT) {
-                this.status = TaskStatus.DISPATCHING;
-                this.updateTime = System.currentTimeMillis();
-                return true;
-            }
-            // 如果已经被取消或其他终态，返回 false
-            return false;
-        }
-    }
-
-    /**
-     * 检查是否可以执行（非阻塞检查）
-     */
-    public boolean canExecute() {
-        return !this.status.isTerminal();
-    }
-
-    /**
-     * 转换到 ACKED 状态（原子操作）
-     */
-    public boolean transitionToAcked() {
-        synchronized (statusLock) {
-            if (this.status == TaskStatus.DISPATCHING) {
-                this.status = TaskStatus.ACKED;
-                this.updateTime = System.currentTimeMillis();
-                return true;
-            }
-            return false;
-        }
-    }
-
-    /**
-     * 转换到 RETRY_WAIT 状态（原子操作）
-     */
-    public boolean transitionToRetry(int maxRetry) {
-        synchronized (statusLock) {
-            if (this.status == TaskStatus.DISPATCHING) {
-                this.retryCount++;
-                if (this.retryCount >= maxRetry) {
-                    this.status = TaskStatus.FAILED_TERMINAL;
-                    this.updateTime = System.currentTimeMillis();
-                    return true;
-                }
-                this.status = TaskStatus.RETRY_WAIT;
-                this.updateTime = System.currentTimeMillis();
-                return true;
-            }
-            return false;
-        }
-    }
-
-    /**
-     * 转换到 FAILED_TERMINAL 状态（原子操作）
-     */
-    public boolean transitionToDead(String error) {
-        synchronized (statusLock) {
-            if (!this.status.isTerminal()) {
-                this.status = TaskStatus.FAILED_TERMINAL;
-                this.lastError = error;
-                this.updateTime = System.currentTimeMillis();
-                return true;
-            }
-            return false;
-        }
+    public boolean isCancellable() {
+        return getStatus().isCancellable();
     }
 
     // ========== Getters and Setters ==========
@@ -392,23 +363,6 @@ public class Task {
 
     public void setIdempotencyKey(String idempotencyKey) {
         this.idempotencyKey = idempotencyKey;
-    }
-
-    public TaskStatus getStatus() {
-        return status;
-    }
-
-    public void setStatus(TaskStatus status) {
-        this.status = status;
-        this.updateTime = System.currentTimeMillis();
-    }
-
-    public long getTriggerTime() {
-        return triggerTime;
-    }
-
-    public void setTriggerTime(long triggerTime) {
-        this.triggerTime = triggerTime;
     }
 
     public String getWebhookUrl() {
@@ -443,12 +397,28 @@ public class Task {
         this.payload = payload;
     }
 
-    public int getMaxRetry() {
-        return maxRetry;
+    public long getDelay() {
+        return delay;
     }
 
-    public void setMaxRetry(int maxRetry) {
-        this.maxRetry = maxRetry;
+    public void setDelay(long delay) {
+        this.delay = delay;
+    }
+
+    public long getWakeTime() {
+        return wakeTime;
+    }
+
+    public void setWakeTime(long wakeTime) {
+        this.wakeTime = wakeTime;
+    }
+
+    public long getTimeout() {
+        return timeout;
+    }
+
+    public void setTimeout(long timeout) {
+        this.timeout = timeout;
     }
 
     public int getRetryCount() {
@@ -459,12 +429,20 @@ public class Task {
         this.retryCount = retryCount;
     }
 
-    public long getTimeoutMs() {
-        return timeoutMs;
+    public int getMaxRetryCount() {
+        return maxRetryCount;
     }
 
-    public void setTimeoutMs(long timeoutMs) {
-        this.timeoutMs = timeoutMs;
+    public void setMaxRetryCount(int maxRetryCount) {
+        this.maxRetryCount = maxRetryCount;
+    }
+
+    public TaskLifecycle getLifecycle() {
+        return lifecycle;
+    }
+
+    public void setLifecycle(TaskLifecycle lifecycle) {
+        this.lifecycle = lifecycle;
     }
 
     public long getVersion() {
@@ -499,12 +477,36 @@ public class Task {
         this.lastError = lastError;
     }
 
-    public long getWakeTime() {
-        return wakeTime;
+    public String getShardKey() {
+        return shardKey;
     }
 
-    public void setWakeTime(long wakeTime) {
-        this.wakeTime = wakeTime;
+    public void setShardKey(String shardKey) {
+        this.shardKey = shardKey;
+    }
+
+    public int getShardId() {
+        return shardId;
+    }
+
+    public void setShardId(int shardId) {
+        this.shardId = shardId;
+    }
+
+    public boolean isDurable() {
+        return durable;
+    }
+
+    public void setDurable(boolean durable) {
+        this.durable = durable;
+    }
+
+    public long getActualWakeTime() {
+        return actualWakeTime;
+    }
+
+    public void setActualWakeTime(long actualWakeTime) {
+        this.actualWakeTime = actualWakeTime;
     }
 
     public long getExecutionStartTime() {
@@ -515,13 +517,18 @@ public class Task {
         this.executionStartTime = executionStartTime;
     }
 
+    public void incrementVersion() {
+        this.version++;
+        this.updateTime = System.currentTimeMillis();
+    }
+
     @Override
     public String toString() {
         return "Task{" +
                 "taskId='" + taskId + '\'' +
                 ", bizKey='" + bizKey + '\'' +
-                ", status=" + status +
-                ", triggerTime=" + triggerTime +
+                ", status=" + getStatus() +
+                ", wakeTime=" + wakeTime +
                 ", webhookUrl='" + webhookUrl + '\'' +
                 ", retryCount=" + retryCount +
                 ", version=" + version +

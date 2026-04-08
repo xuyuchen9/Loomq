@@ -505,9 +505,21 @@ Built-in Prometheus metrics:
 |---------|---------|--------|
 | V0.3 | Distributed sharding, consistent hash | ✅ Released |
 | V0.4 | Unified state machine, retry policies, idempotency enhancement | ✅ Released |
+| V0.4.5 | Engineering packaging (Docker, K8s, monitoring) | ✅ Released |
 | V0.5 | Async replication (1 primary + 1 replica) | 📋 Planned |
 | V0.6 | Raft consensus (strong consistency) | 📋 Planned |
 | V0.7 | Admin UI dashboard | 📋 Planned |
+
+### V0.4.5 Highlights
+
+**Production-Ready Packaging**
+- Docker & Docker Compose support with health checks
+- Kubernetes manifests for StatefulSet deployment
+- Prometheus metrics and Grafana dashboards
+- Comprehensive logging with logback configuration
+- Environment-based configuration
+- Startup scripts for Linux/macOS and Windows
+- Complete deployment documentation
 
 ### V0.4 Highlights
 

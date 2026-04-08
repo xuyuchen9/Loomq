@@ -164,12 +164,13 @@ public class TaskLifecycle {
 
     /**
      * RUNNING → FAILED
+     * RETRY_WAIT → FAILED
      * 执行最终失败（不可重试）
      */
     public boolean transitionToFailed(String error) {
         synchronized (transitionLock) {
             TaskStatus current = status.get();
-            if (current == TaskStatus.RUNNING) {
+            if (current == TaskStatus.RUNNING || current == TaskStatus.RETRY_WAIT) {
                 status.set(TaskStatus.FAILED);
                 lastError = error;
                 lastErrorTime = System.currentTimeMillis();

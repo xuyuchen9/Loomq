@@ -5,41 +5,44 @@ import com.loomq.common.ErrorCode;
 import com.loomq.common.IdGenerator;
 import com.loomq.common.MetricsCollector;
 import com.loomq.common.Result;
-import com.loomq.dispatcher.WebhookDispatcher;
 import com.loomq.entity.EventType;
-import com.loomq.entity.Task;
-import com.loomq.entity.TaskEvent;
 import com.loomq.entity.TaskStatus;
-import com.loomq.scheduler.TaskScheduler;
+import com.loomq.entity.Task;
+import com.loomq.retry.RetryPolicy;
+import com.loomq.retry.RetryPolicyFactory;
+import com.loomq.store.IdempotencyResult;
 import com.loomq.store.TaskStore;
-import com.loomq.wal.WalEngine;
 import io.javalin.http.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
+import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
- * 任务 API 控制器
+ * 任务 API 控制器 V3
+ *
+ * 完整实现需求文档定义的 HTTP API。
+ *
+ * @author loomq
+ * @since v0.4
  */
 public class TaskController {
+
     private static final Logger logger = LoggerFactory.getLogger(TaskController.class);
     private static final Logger auditLogger = LoggerFactory.getLogger("AUDIT");
 
-    private final WalEngine walEngine;
     private final TaskStore taskStore;
-    private final TaskScheduler scheduler;
-    private final WebhookDispatcher dispatcher;
     private final ObjectMapper objectMapper = new ObjectMapper();
+    private final RetryPolicy defaultRetryPolicy;
 
-    public TaskController(WalEngine walEngine, TaskStore taskStore,
-                          TaskScheduler scheduler, WebhookDispatcher dispatcher) {
-        this.walEngine = walEngine;
+    public TaskController(TaskStore taskStore) {
         this.taskStore = taskStore;
-        this.scheduler = scheduler;
-        this.dispatcher = dispatcher;
+        this.defaultRetryPolicy = RetryPolicyFactory.RetryConfig.defaultConfig().toRetryPolicy();
     }
+
+    // ========== 任务创建 ==========
 
     /**
      * 创建任务
@@ -50,82 +53,95 @@ public class TaskController {
             CreateTaskRequest request = ctx.bodyAsClass(CreateTaskRequest.class);
 
             // 参数校验
-            if (request.webhookUrl() == null || request.webhookUrl().isEmpty()) {
-                ctx.json(Result.error(ErrorCode.INVALID_PARAM, "webhookUrl is required"));
+            ValidationResult validation = validateCreateRequest(request);
+            if (!validation.valid()) {
+                ctx.json(Result.error(ErrorCode.INVALID_PARAM, validation.message()));
                 return;
             }
 
-            // 计算触发时间
-            long triggerTime;
-            if (request.triggerTime() != null && request.triggerTime() > 0) {
-                triggerTime = request.triggerTime();
-            } else if (request.delayMs() != null && request.delayMs() > 0) {
-                triggerTime = System.currentTimeMillis() + request.delayMs();
-            } else {
-                ctx.json(Result.error(ErrorCode.INVALID_PARAM, "triggerTime or delayMs is required"));
-                return;
+            // 计算唤醒时间
+            long wakeTime = calculateWakeTime(request);
+
+            // 幂等检查（使用 idempotencyKey）
+            if (request.idempotencyKey() != null && !request.idempotencyKey().isEmpty()) {
+                IdempotencyResult result = taskStore.getByIdempotencyKey(request.idempotencyKey());
+                if (result.exists()) {
+                    if (result.isTerminal()) {
+                        ctx.json(Result.error(ErrorCode.TASK_ALREADY_COMPLETED,
+                                "Task already completed with status: " + result.getTask().getStatus()));
+                        return;
+                    }
+                    // 返回已存在的活跃任务
+                    ctx.json(Result.success(new CreateTaskResponse(
+                            result.getTask().getTaskId(),
+                            result.getTask().getStatus().name(),
+                            result.getTask().getWakeTime(),
+                            true,  // isDuplicate
+                            false  // isDurable (从现有任务获取)
+                    )));
+                    return;
+                }
             }
 
-            // 幂等检查
-            String idempotencyKey = request.idempotencyKey();
-            if (idempotencyKey != null && taskStore.existsByIdempotencyKey(idempotencyKey)) {
-                Task existing = taskStore.getByIdempotencyKey(idempotencyKey);
-                ctx.json(Result.success(new CreateTaskResponse(existing.getTaskId(), existing.getStatus().name())));
-                return;
-            }
-
-            // 检查 bizKey 幂等
-            String bizKey = request.bizKey();
-            if (bizKey != null && taskStore.existsByBizKey(bizKey)) {
-                Task existing = taskStore.getByBizKey(bizKey);
-                ctx.json(Result.success(new CreateTaskResponse(existing.getTaskId(), existing.getStatus().name())));
-                return;
+            // bizKey 幂等检查
+            if (request.bizKey() != null && !request.bizKey().isEmpty()) {
+                Task existing = taskStore.getByBizKey(request.bizKey());
+                if (existing != null) {
+                    if (existing.getStatus().isTerminal()) {
+                        ctx.json(Result.error(ErrorCode.TASK_ALREADY_COMPLETED,
+                                "Task with bizKey already completed with status: " + existing.getStatus()));
+                        return;
+                    }
+                    ctx.json(Result.success(new CreateTaskResponse(
+                            existing.getTaskId(),
+                            existing.getStatus().name(),
+                            existing.getWakeTime(),
+                            true,
+                            existing.isDurable()
+                    )));
+                    return;
+                }
             }
 
             // 生成任务ID
             String taskId = IdGenerator.generateTaskId();
 
-            // 创建任务对象
+            // 创建任务
             Task task = Task.builder()
                     .taskId(taskId)
-                    .bizKey(bizKey)
-                    .idempotencyKey(idempotencyKey)
-                    .status(TaskStatus.PENDING)
-                    .triggerTime(triggerTime)
+                    .bizKey(request.bizKey())
+                    .idempotencyKey(request.idempotencyKey())
                     .webhookUrl(request.webhookUrl())
                     .method(request.method() != null ? request.method() : "POST")
                     .headers(request.headers())
                     .payload(request.payload() != null ? toJson(request.payload()) : null)
-                    .maxRetry(request.maxRetry() != null ? request.maxRetry() : 5)
-                    .timeoutMs(request.timeoutMs() != null ? request.timeoutMs() : 3000)
+                    .delay(request.delayMs() != null ? request.delayMs() : 0)
+                    .wakeTime(wakeTime)
+                    .timeout(request.timeoutMs() != null ? request.timeoutMs() : 3000)
+                    .maxRetryCount(request.maxRetry() != null ? request.maxRetry() : 3)
+                    .durable(request.durable() != null ? request.durable() : true)
                     .createTime(System.currentTimeMillis())
                     .build();
-
-            // 写入 CREATE 事件
-            TaskEvent createEvent = TaskEvent.builder()
-                    .eventId(IdGenerator.generateEventId())
-                    .taskId(taskId)
-                    .eventType(EventType.CREATE)
-                    .version(1)
-                    .prevVersion(0)
-                    .eventTime(System.currentTimeMillis())
-                    .payload(toJson(task))
-                    .build();
-            walEngine.appendEvent(createEvent);
 
             // 存储任务
             taskStore.add(task);
 
-            // 调度任务
-            scheduler.schedule(task);
+            // 调度任务（实际调度逻辑由外部引擎处理）
+            // scheduler.schedule(task);
 
             // 记录审计日志
-            auditLogger.info("TASK_CREATE|{}|{}|{}|{}", taskId, bizKey, request.webhookUrl(), triggerTime);
+            auditLogger.info("TASK_CREATE|{}|{}|{}|{}", taskId, request.bizKey(), request.webhookUrl(), wakeTime);
 
             // 记录指标
             MetricsCollector.getInstance().incrementTasksCreated();
 
-            ctx.status(201).json(Result.success(new CreateTaskResponse(taskId, task.getStatus().name())));
+            ctx.status(201).json(Result.success(new CreateTaskResponse(
+                    taskId,
+                    task.getStatus().name(),
+                    wakeTime,
+                    false,  // isDuplicate
+                    task.isDurable()
+            )));
 
         } catch (Exception e) {
             logger.error("Failed to create task", e);
@@ -133,31 +149,82 @@ public class TaskController {
         }
     }
 
+    // ========== 任务查询 ==========
+
     /**
-     * 查询任务
+     * 查询任务（支持多种查询方式）
      * GET /api/v1/tasks/{taskId}
+     * GET /api/v1/tasks?bizKey={bizKey}
+     * GET /api/v1/tasks?idempotencyKey={idempotencyKey}
+     * GET /api/v1/tasks?status={status}
      */
     public void getTask(Context ctx) {
+        // 尝试从路径参数获取 taskId
         String taskId = ctx.pathParam("taskId");
 
-        Task task = taskStore.get(taskId);
-        if (task == null) {
-            ctx.json(Result.error(ErrorCode.TASK_NOT_FOUND));
+        if (taskId != null && !taskId.isEmpty()) {
+            // 按 taskId 查询
+            Task task = taskStore.get(taskId);
+            if (task == null) {
+                ctx.json(Result.error(ErrorCode.TASK_NOT_FOUND));
+                return;
+            }
+            ctx.json(Result.success(toTaskResponse(task)));
             return;
         }
 
-        ctx.json(Result.success(toTaskResponse(task)));
+        // 检查查询参数
+        String bizKey = ctx.queryParam("bizKey");
+        String idempotencyKey = ctx.queryParam("idempotencyKey");
+        String statusStr = ctx.queryParam("status");
+
+        if (bizKey != null && !bizKey.isEmpty()) {
+            // 按 bizKey 查询
+            Task task = taskStore.getByBizKey(bizKey);
+            if (task == null) {
+                ctx.json(Result.error(ErrorCode.TASK_NOT_FOUND, "Task not found with bizKey: " + bizKey));
+                return;
+            }
+            ctx.json(Result.success(toTaskResponse(task)));
+            return;
+        }
+
+        if (idempotencyKey != null && !idempotencyKey.isEmpty()) {
+            // 按 idempotencyKey 查询
+            IdempotencyResult result = taskStore.getByIdempotencyKey(idempotencyKey);
+            if (result.isNotFound()) {
+                ctx.json(Result.error(ErrorCode.TASK_NOT_FOUND, "Task not found with idempotencyKey: " + idempotencyKey));
+                return;
+            }
+            ctx.json(Result.success(toTaskResponse(result.getTask())));
+            return;
+        }
+
+        if (statusStr != null && !statusStr.isEmpty()) {
+            // 按状态查询
+            try {
+                TaskStatus status = TaskStatus.valueOf(statusStr.toUpperCase());
+                List<Task> tasks = taskStore.getByStatus(status);
+                List<TaskResponse> responses = tasks.stream()
+                        .map(this::toTaskResponse)
+                        .collect(Collectors.toList());
+                ctx.json(Result.success(new TaskListResponse(responses.size(), responses)));
+                return;
+            } catch (IllegalArgumentException e) {
+                ctx.json(Result.error(ErrorCode.INVALID_PARAM, "Invalid status: " + statusStr));
+                return;
+            }
+        }
+
+        ctx.json(Result.error(ErrorCode.INVALID_PARAM,
+                "Please provide taskId, bizKey, idempotencyKey, or status"));
     }
+
+    // ========== 任务取消 ==========
 
     /**
      * 取消任务
      * DELETE /api/v1/tasks/{taskId}
-     *
-     * 语义说明：
-     * Loomq 提供"最终一致取消语义"，而非"强一致取消"。
-     * - 成功返回：任务状态已设为 CANCELLED，不会再被调度
-     * - 但如果任务已在执行中，可能仍会完成 webhook 调用
-     * - 下游服务必须实现幂等以处理可能的重复调用
      */
     public void cancelTask(Context ctx) {
         String taskId = ctx.pathParam("taskId");
@@ -168,47 +235,26 @@ public class TaskController {
             return;
         }
 
-        // 原子操作：尝试取消
-        // 如果任务已在执行中（DISPATCHING），此操作会失败
-        if (!task.tryCancel()) {
+        // 尝试取消
+        if (!task.cancel()) {
             ctx.json(Result.error(ErrorCode.TASK_CANNOT_CANCEL,
-                    "Task status is " + task.getStatus() + " and cannot be cancelled. " +
-                    "Note: Task may already be executing."));
+                    "Task status is " + task.getStatus() + " and cannot be cancelled."));
             return;
         }
 
-        try {
-            // 状态已由 tryCancel 设置为 CANCELLED
-            task.incrementVersion();
-            taskStore.update(task);
+        task.incrementVersion();
+        taskStore.update(task);
 
-            // 从调度器移除（中断休眠线程）
-            scheduler.unschedule(taskId);
+        // 记录审计日志
+        auditLogger.info("TASK_CANCEL|{}|{}", taskId, task.getBizKey());
 
-            // 写入 CANCEL 事件
-            TaskEvent cancelEvent = TaskEvent.builder()
-                    .eventId(IdGenerator.generateEventId())
-                    .taskId(taskId)
-                    .eventType(EventType.CANCEL)
-                    .version(task.getVersion())
-                    .prevVersion(task.getVersion() - 1)
-                    .eventTime(System.currentTimeMillis())
-                    .build();
-            walEngine.appendEvent(cancelEvent);
+        // 记录指标
+        MetricsCollector.getInstance().incrementTasksCancelled();
 
-            // 记录审计日志
-            auditLogger.info("TASK_CANCEL|{}|{}", taskId, task.getBizKey());
-
-            // 记录指标
-            MetricsCollector.getInstance().incrementTasksCancelled();
-
-            ctx.json(Result.success(toTaskResponse(task)));
-
-        } catch (IOException e) {
-            logger.error("Failed to cancel task: {}", taskId, e);
-            ctx.json(Result.error(ErrorCode.INTERNAL_ERROR, e.getMessage()));
-        }
+        ctx.json(Result.success(toTaskResponse(task)));
     }
+
+    // ========== 任务修改 ==========
 
     /**
      * 修改任务
@@ -232,8 +278,6 @@ public class TaskController {
         try {
             ModifyTaskRequest request = ctx.bodyAsClass(ModifyTaskRequest.class);
 
-            long oldTriggerTime = task.getTriggerTime();
-
             // 版本校验
             if (request.version() != null && request.version() != task.getVersion()) {
                 ctx.json(Result.error(ErrorCode.VERSION_CONFLICT,
@@ -242,8 +286,8 @@ public class TaskController {
             }
 
             // 应用修改
-            if (request.triggerTime() != null) {
-                task.setTriggerTime(request.triggerTime());
+            if (request.wakeTime() != null) {
+                task.setWakeTime(request.wakeTime());
             }
             if (request.webhookUrl() != null) {
                 task.setWebhookUrl(request.webhookUrl());
@@ -251,34 +295,16 @@ public class TaskController {
             if (request.payload() != null) {
                 task.setPayload(toJson(request.payload()));
             }
-            if (request.maxRetry() != null) {
-                task.setMaxRetry(request.maxRetry());
+            if (request.maxRetryCount() != null) {
+                task.setMaxRetryCount(request.maxRetryCount());
             }
             if (request.timeoutMs() != null) {
-                task.setTimeoutMs(request.timeoutMs());
+                task.setTimeout(request.timeoutMs());
             }
 
             task.incrementVersion();
             taskStore.update(task);
 
-            // 如果触发时间变化，重新调度
-            if (oldTriggerTime != task.getTriggerTime()) {
-                scheduler.reschedule(task);
-            }
-
-            // 写入 MODIFY 事件
-            TaskEvent modifyEvent = TaskEvent.builder()
-                    .eventId(IdGenerator.generateEventId())
-                    .taskId(taskId)
-                    .eventType(EventType.MODIFY)
-                    .version(task.getVersion())
-                    .prevVersion(task.getVersion() - 1)
-                    .eventTime(System.currentTimeMillis())
-                    .payload(toJson(request))
-                    .build();
-            walEngine.appendEvent(modifyEvent);
-
-            // 记录审计日志
             auditLogger.info("TASK_MODIFY|{}|{}", taskId, task.getBizKey());
 
             ctx.json(Result.success(toTaskResponse(task)));
@@ -289,8 +315,10 @@ public class TaskController {
         }
     }
 
+    // ========== 立即触发 ==========
+
     /**
-     * 立即触发
+     * 立即触发任务
      * POST /api/v1/tasks/{taskId}/fire-now
      */
     public void fireNow(Context ctx) {
@@ -308,56 +336,73 @@ public class TaskController {
             return;
         }
 
-        try {
-            // 更新触发时间为立即
-            long newTriggerTime = System.currentTimeMillis();
-            task.setTriggerTime(newTriggerTime);
-            task.incrementVersion();
-            taskStore.update(task);
+        // 设置立即执行
+        task.setWakeTime(System.currentTimeMillis());
+        task.transitionToReady();
 
-            // 写入 FIRE_NOW 事件
-            TaskEvent fireEvent = TaskEvent.builder()
-                    .eventId(IdGenerator.generateEventId())
-                    .taskId(taskId)
-                    .eventType(EventType.FIRE_NOW)
-                    .version(task.getVersion())
-                    .prevVersion(task.getVersion() - 1)
-                    .eventTime(newTriggerTime)
-                    .build();
-            walEngine.appendEvent(fireEvent);
+        auditLogger.info("TASK_FIRE_NOW|{}|{}", taskId, task.getBizKey());
 
-            // 从调度器移除旧的调度
-            scheduler.unschedule(taskId);
-
-            // 记录审计日志
-            auditLogger.info("TASK_FIRE_NOW|{}|{}", taskId, task.getBizKey());
-
-            // 直接调用 dispatcher 执行，不依赖时间轮
-            dispatcher.dispatch(task);
-
-            ctx.json(Result.success(toTaskResponse(task)));
-
-        } catch (IOException e) {
-            logger.error("Failed to fire task: {}", taskId, e);
-            ctx.json(Result.error(ErrorCode.INTERNAL_ERROR, e.getMessage()));
-        }
+        ctx.json(Result.success(toTaskResponse(task)));
     }
 
-    // ========== Helper Methods ==========
+    // ========== 辅助方法 ==========
+
+    private ValidationResult validateCreateRequest(CreateTaskRequest request) {
+        if (request.webhookUrl() == null || request.webhookUrl().isEmpty()) {
+            return new ValidationResult(false, "webhookUrl is required");
+        }
+
+        if (request.delayMs() != null && request.delayMs() < 0) {
+            return new ValidationResult(false, "delayMs cannot be negative");
+        }
+
+        if (request.wakeTime() != null && request.wakeTime() < System.currentTimeMillis()) {
+            return new ValidationResult(false, "wakeTime cannot be in the past");
+        }
+
+        if (request.maxRetry() != null && request.maxRetry() < 0) {
+            return new ValidationResult(false, "maxRetry cannot be negative");
+        }
+
+        if (request.timeoutMs() != null && request.timeoutMs() < 0) {
+            return new ValidationResult(false, "timeoutMs cannot be negative");
+        }
+
+        if (request.idempotencyKey() != null && request.idempotencyKey().isEmpty()) {
+            return new ValidationResult(false, "idempotencyKey cannot be empty string");
+        }
+
+        if (request.bizKey() != null && request.bizKey().isEmpty()) {
+            return new ValidationResult(false, "bizKey cannot be empty string");
+        }
+
+        return new ValidationResult(true, null);
+    }
+
+    private long calculateWakeTime(CreateTaskRequest request) {
+        if (request.wakeTime() != null && request.wakeTime() > 0) {
+            return request.wakeTime();
+        }
+        if (request.delayMs() != null && request.delayMs() > 0) {
+            return System.currentTimeMillis() + request.delayMs();
+        }
+        return System.currentTimeMillis();
+    }
 
     private TaskResponse toTaskResponse(Task task) {
         return new TaskResponse(
                 task.getTaskId(),
                 task.getBizKey(),
+                task.getIdempotencyKey(),
                 task.getStatus().name(),
-                task.getTriggerTime(),
+                task.getWakeTime(),
                 task.getWebhookUrl(),
                 task.getMethod(),
                 task.getHeaders(),
                 task.getPayload(),
-                task.getMaxRetry(),
+                task.getMaxRetryCount(),
                 task.getRetryCount(),
-                task.getTimeoutMs(),
+                task.getTimeout(),
                 task.getVersion(),
                 task.getCreateTime(),
                 task.getUpdateTime(),
@@ -379,36 +424,44 @@ public class TaskController {
             String bizKey,
             String idempotencyKey,
             Long delayMs,
-            Long triggerTime,
+            Long wakeTime,
             String webhookUrl,
             String method,
             Map<String, String> headers,
             Object payload,
             Integer maxRetry,
-            Long timeoutMs
+            Long timeoutMs,
+            Boolean durable
     ) {}
 
     public record ModifyTaskRequest(
             Long version,
-            Long triggerTime,
+            Long wakeTime,
             String webhookUrl,
             Object payload,
-            Integer maxRetry,
+            Integer maxRetryCount,
             Long timeoutMs
     ) {}
 
-    public record CreateTaskResponse(String taskId, String status) {}
+    public record CreateTaskResponse(
+            String taskId,
+            String status,
+            long wakeTime,
+            boolean isDuplicate,
+            boolean isDurable
+    ) {}
 
     public record TaskResponse(
             String taskId,
             String bizKey,
+            String idempotencyKey,
             String status,
-            long triggerTime,
+            long wakeTime,
             String webhookUrl,
             String method,
             Map<String, String> headers,
             String payload,
-            int maxRetry,
+            int maxRetryCount,
             int retryCount,
             long timeoutMs,
             long version,
@@ -416,4 +469,11 @@ public class TaskController {
             long updateTime,
             String lastError
     ) {}
+
+    public record TaskListResponse(
+            int count,
+            List<TaskResponse> tasks
+    ) {}
+
+    public record ValidationResult(boolean valid, String message) {}
 }

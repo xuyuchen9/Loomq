@@ -1,12 +1,12 @@
 package com.loomq.acceptance;
 
-import com.loomq.entity.v3.EventTypeV3;
-import com.loomq.entity.v3.TaskLifecycleV3;
-import com.loomq.entity.v3.TaskStatusV3;
-import com.loomq.entity.v3.TaskV3;
-import com.loomq.recovery.v3.RecoveryServiceV3;
-import com.loomq.store.v3.IdempotencyResult;
-import com.loomq.store.v3.TaskStoreV3;
+import com.loomq.entity.EventType;
+import com.loomq.entity.TaskLifecycle;
+import com.loomq.entity.TaskStatus;
+import com.loomq.entity.Task;
+import com.loomq.recovery.RecoveryService;
+import com.loomq.store.IdempotencyResult;
+import com.loomq.store.TaskStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -33,11 +33,11 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 public class AcceptanceTest {
 
-    private TaskStoreV3 taskStore;
+    private TaskStore taskStore;
 
     @BeforeEach
     void setUp() {
-        taskStore = new TaskStoreV3();
+        taskStore = new TaskStore();
     }
 
     // ========== AC-05: 并发创建幂等 ==========
@@ -66,7 +66,7 @@ public class AcceptanceTest {
                         startLatch.await(); // 等待同时开始
 
                         // 使用原子性方法创建任务
-                        TaskV3 task = TaskV3.builder()
+                        Task task = Task.builder()
                                 .taskId("task-" + Thread.currentThread().getId() + "-" + System.nanoTime())
                                 .idempotencyKey(idempotencyKey)
                                 .webhookUrl("https://example.com/webhook")
@@ -114,7 +114,7 @@ public class AcceptanceTest {
         void testTerminalIdempotencyKeyProtection() {
             // Given: 创建一个任务并完成
             String idempotencyKey = "order-terminal";
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-terminal-001")
                     .idempotencyKey(idempotencyKey)
                     .webhookUrl("https://example.com/webhook")
@@ -132,7 +132,7 @@ public class AcceptanceTest {
 
             // Then: 返回终态存在
             assertTrue(result.isTerminal(), "应返回 TERMINAL_EXISTS");
-            assertEquals(TaskStatusV3.SUCCESS, result.getTask().getStatus());
+            assertEquals(TaskStatus.SUCCESS, result.getTask().getStatus());
         }
 
         @Test
@@ -140,7 +140,7 @@ public class AcceptanceTest {
         void testActiveIdempotencyKeyProtection() {
             // Given: 创建一个处于 SCHEDULED 状态的任务
             String idempotencyKey = "order-active";
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-active-001")
                     .idempotencyKey(idempotencyKey)
                     .webhookUrl("https://example.com/webhook")
@@ -155,7 +155,7 @@ public class AcceptanceTest {
 
             // Then: 返回活跃存在
             assertTrue(result.isActive(), "应返回 ACTIVE_EXISTS");
-            assertEquals(TaskStatusV3.SCHEDULED, result.getTask().getStatus());
+            assertEquals(TaskStatus.SCHEDULED, result.getTask().getStatus());
         }
 
         @Test
@@ -163,7 +163,7 @@ public class AcceptanceTest {
         void testIndexConsistency() {
             // Given: 创建多个任务
             for (int i = 0; i < 100; i++) {
-                TaskV3 task = TaskV3.builder()
+                Task task = Task.builder()
                         .taskId("task-" + i)
                         .idempotencyKey("idempotency-" + i)
                         .bizKey("biz-" + i)
@@ -176,7 +176,7 @@ public class AcceptanceTest {
             // Then: 验证所有索引一致性
             for (int i = 0; i < 100; i++) {
                 // 主索引
-                TaskV3 task = taskStore.get("task-" + i);
+                Task task = taskStore.get("task-" + i);
                 assertNotNull(task, "主索引应存在");
 
                 // 幂等索引
@@ -185,7 +185,7 @@ public class AcceptanceTest {
                 assertEquals("task-" + i, result.getTask().getTaskId());
 
                 // 业务键索引
-                TaskV3 bizTask = taskStore.getByBizKey("biz-" + i);
+                Task bizTask = taskStore.getByBizKey("biz-" + i);
                 assertNotNull(bizTask, "业务键索引应存在");
                 assertEquals("task-" + i, bizTask.getTaskId());
             }
@@ -204,27 +204,27 @@ public class AcceptanceTest {
         @DisplayName("AC-06-01: WAL 重放后状态正确")
         void testRecoveryStateConsistency() {
             // Given: 模拟 WAL 记录
-            TaskStoreV3 store = new TaskStoreV3();
-            RecoveryServiceV3 recoveryService = new RecoveryServiceV3(
+            TaskStore store = new TaskStore();
+            RecoveryService recoveryService = new RecoveryService(
                     store,
-                    RecoveryServiceV3.RecoveryConfig.defaultConfig()
+                    RecoveryService.RecoveryConfig.defaultConfig()
             );
 
-            List<RecoveryServiceV3.WalRecordV3> records = new ArrayList<>();
+            List<RecoveryService.WalRecord> records = new ArrayList<>();
 
             // 创建任务
-            records.add(new RecoveryServiceV3.WalRecordV3(
-                    1, "task-recovery-001", EventTypeV3.CREATE,
+            records.add(new RecoveryService.WalRecord(
+                    1, "task-recovery-001", EventType.CREATE,
                     System.currentTimeMillis(), null
             ));
             // 调度任务
-            records.add(new RecoveryServiceV3.WalRecordV3(
-                    2, "task-recovery-001", EventTypeV3.SCHEDULE,
+            records.add(new RecoveryService.WalRecord(
+                    2, "task-recovery-001", EventType.SCHEDULE,
                     System.currentTimeMillis(), null
             ));
 
             // When: 恢复
-            RecoveryServiceV3.RecoveryResult result = recoveryService.recoverFromRecords(records);
+            RecoveryService.RecoveryResult result = recoveryService.recoverFromRecords(records);
 
             // Then: 验证状态
             assertEquals(2, result.walRecords(), "WAL 记录数应为2");
@@ -235,29 +235,29 @@ public class AcceptanceTest {
         @DisplayName("AC-06-02: PENDING 任务恢复后重新调度")
         void testPendingTaskRecovery() {
             // Given: 创建 PENDING 状态任务
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-pending-recovery")
                     .webhookUrl("https://example.com/webhook")
                     .wakeTime(System.currentTimeMillis() + 3600000)
                     .build();
 
             taskStore.add(task);
-            assertEquals(TaskStatusV3.PENDING, task.getStatus());
+            assertEquals(TaskStatus.PENDING, task.getStatus());
 
             // When: 模拟崩溃恢复
             // (实际场景是 WAL 重放，这里简化为直接检查状态)
-            TaskV3 recovered = taskStore.get("task-pending-recovery");
+            Task recovered = taskStore.get("task-pending-recovery");
 
             // Then: 状态应为 PENDING
             assertNotNull(recovered);
-            assertEquals(TaskStatusV3.PENDING, recovered.getStatus());
+            assertEquals(TaskStatus.PENDING, recovered.getStatus());
         }
 
         @Test
         @DisplayName("AC-06-03: SCHEDULED 任务恢复后保留调度状态")
         void testScheduledTaskRecovery() {
             // Given: 创建 SCHEDULED 状态任务
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-scheduled-recovery")
                     .webhookUrl("https://example.com/webhook")
                     .wakeTime(System.currentTimeMillis() + 3600000)
@@ -267,18 +267,18 @@ public class AcceptanceTest {
             assertTrue(task.transitionToScheduled());
 
             // When: 检查恢复状态
-            TaskV3 recovered = taskStore.get("task-scheduled-recovery");
+            Task recovered = taskStore.get("task-scheduled-recovery");
 
             // Then: 状态应为 SCHEDULED
             assertNotNull(recovered);
-            assertEquals(TaskStatusV3.SCHEDULED, recovered.getStatus());
+            assertEquals(TaskStatus.SCHEDULED, recovered.getStatus());
         }
 
         @Test
         @DisplayName("AC-06-04: 终态任务恢复后忽略")
         void testTerminalTaskRecoveryIgnored() {
             // Given: 创建终态任务
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-terminal-recovery")
                     .webhookUrl("https://example.com/webhook")
                     .wakeTime(System.currentTimeMillis())
@@ -291,12 +291,12 @@ public class AcceptanceTest {
             task.transitionToSuccess();
 
             // When: 检查恢复行为
-            TaskV3 recovered = taskStore.get("task-terminal-recovery");
+            Task recovered = taskStore.get("task-terminal-recovery");
 
             // Then: 终态任务存在但不需要处理
             assertNotNull(recovered);
             assertTrue(recovered.getStatus().isTerminal());
-            assertEquals(TaskStatusV3.SUCCESS, recovered.getStatus());
+            assertEquals(TaskStatus.SUCCESS, recovered.getStatus());
         }
     }
 
@@ -310,7 +310,7 @@ public class AcceptanceTest {
         @DisplayName("AC-07-01: RUNNING 任务崩溃后重置为 READY")
         void testRunningTaskResetToReady() {
             // Given: 创建 RUNNING 状态任务
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-running-recovery")
                     .webhookUrl("https://example.com/webhook")
                     .wakeTime(System.currentTimeMillis())
@@ -321,26 +321,26 @@ public class AcceptanceTest {
             task.transitionToReady();
             task.transitionToRunning(); // 崩溃时状态
 
-            assertEquals(TaskStatusV3.RUNNING, task.getStatus());
+            assertEquals(TaskStatus.RUNNING, task.getStatus());
 
             // When: 恢复（模拟 RUNNING 状态重置）
             // 按照 RECOVERY_MODEL_SPEC，RUNNING 任务应重置为 READY 重新执行
-            TaskLifecycleV3 lifecycle = task.getLifecycle();
+            TaskLifecycle lifecycle = task.getLifecycle();
 
             // 模拟恢复逻辑：强制设置状态
-            // 注意：实际实现应该在 RecoveryServiceV3 中处理
+            // 注意：实际实现应该在 RecoveryService 中处理
             // 这里验证生命周期支持这种操作
-            lifecycle.forceSetStatus(TaskStatusV3.READY);
+            lifecycle.forceSetStatus(TaskStatus.READY);
 
             // Then: 状态应为 READY
-            assertEquals(TaskStatusV3.READY, task.getStatus());
+            assertEquals(TaskStatus.READY, task.getStatus());
         }
 
         @Test
         @DisplayName("AC-07-02: 重新执行后可以正常完成")
         void testRetriedTaskCanComplete() {
             // Given: 创建任务，模拟重新执行
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-retry-complete")
                     .webhookUrl("https://example.com/webhook")
                     .wakeTime(System.currentTimeMillis())
@@ -354,14 +354,14 @@ public class AcceptanceTest {
             task.transitionToReady();
             task.transitionToRunning();
             // 崩溃，恢复
-            task.getLifecycle().forceSetStatus(TaskStatusV3.READY);
+            task.getLifecycle().forceSetStatus(TaskStatus.READY);
 
             // When: 重新执行并成功
             assertTrue(task.transitionToRunning(), "应该能转换到 RUNNING");
             assertTrue(task.transitionToSuccess(), "应该能转换到 SUCCESS");
 
             // Then: 最终状态为 SUCCESS
-            assertEquals(TaskStatusV3.SUCCESS, task.getStatus());
+            assertEquals(TaskStatus.SUCCESS, task.getStatus());
             assertTrue(task.isTerminal());
         }
 
@@ -369,7 +369,7 @@ public class AcceptanceTest {
         @DisplayName("AC-07-03: 重新执行后可以进入重试")
         void testRetriedTaskCanRetry() {
             // Given: 创建任务
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-retry-retry")
                     .webhookUrl("https://example.com/webhook")
                     .wakeTime(System.currentTimeMillis())
@@ -382,20 +382,20 @@ public class AcceptanceTest {
             task.transitionToRunning();
 
             // When: 崩溃恢复后再次失败
-            task.getLifecycle().forceSetStatus(TaskStatusV3.READY);
+            task.getLifecycle().forceSetStatus(TaskStatus.READY);
             task.transitionToRunning();
             boolean result = task.transitionToRetryWait(); // 进入重试
 
             // Then: 应进入 RETRY_WAIT
             assertTrue(result);
-            assertEquals(TaskStatusV3.RETRY_WAIT, task.getStatus());
+            assertEquals(TaskStatus.RETRY_WAIT, task.getStatus());
         }
 
         @Test
         @DisplayName("AC-07-04: 依赖下游幂等的正确性")
         void testDownstreamIdempotencyRequirement() {
             // Given: 创建任务并执行两次（模拟重新执行）
-            TaskV3 task = TaskV3.builder()
+            Task task = Task.builder()
                     .taskId("task-idempotent-downstream")
                     .idempotencyKey("downstream-order-001") // 关键：幂等键
                     .webhookUrl("https://example.com/webhook")
@@ -414,7 +414,7 @@ public class AcceptanceTest {
             webhookCallCount++; // 第一次调用
 
             // 崩溃恢复
-            task.getLifecycle().forceSetStatus(TaskStatusV3.READY);
+            task.getLifecycle().forceSetStatus(TaskStatus.READY);
 
             // 重新执行
             task.transitionToRunning();
@@ -425,14 +425,14 @@ public class AcceptanceTest {
 
             // 任务最终成功
             task.transitionToSuccess();
-            assertEquals(TaskStatusV3.SUCCESS, task.getStatus());
+            assertEquals(TaskStatus.SUCCESS, task.getStatus());
         }
     }
 
     // ========== 辅助方法 ==========
 
-    private TaskV3 createTestTask(String taskId) {
-        return TaskV3.builder()
+    private Task createTestTask(String taskId) {
+        return Task.builder()
                 .taskId(taskId)
                 .webhookUrl("https://example.com/webhook")
                 .wakeTime(System.currentTimeMillis() + 3600000)

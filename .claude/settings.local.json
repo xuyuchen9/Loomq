@@ -51,7 +51,8 @@
       "Bash(python v0.1_validation_test.py create 10000)",
       "Bash(python real_test.py create)",
       "Bash(python simple_test.py create)",
-      "Bash(java -cp \"target/test-classes;target/classes;$\\(mvn dependency:build-classpath -q -DincludeScope=test -Dmdep.outputFile=/dev/stdout 2>/dev/null\\)\" com.loomq.benchmark.BenchmarkTest create 50 5000)"
+      "Bash(java -cp \"target/test-classes;target/classes;$\\(mvn dependency:build-classpath -q -DincludeScope=test -Dmdep.outputFile=/dev/stdout 2>/dev/null\\)\" com.loomq.benchmark.BenchmarkTest create 50 5000)",
+      "Bash(awk '{sum+=$1} END {print \"Total lines:\", sum}')"
     ]
   }
 }

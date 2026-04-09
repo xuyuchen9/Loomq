@@ -19,7 +19,7 @@ import java.util.function.Consumer;
  * @author loomq
  * @since v0.4.8
  */
-class LeaseCoordinator implements AutoCloseable {
+class TestLeaseCoordinator implements AutoCloseable {
 
     private static final Logger logger = LoggerFactory.getLogger(LeaseCoordinator.class);
 
@@ -48,7 +48,7 @@ class LeaseCoordinator implements AutoCloseable {
      * @param leaseDurationMs 租约有效期（毫秒）
      * @param renewalWindowRatio 续约窗口比例
      */
-    public LeaseCoordinator(long leaseDurationMs, double renewalWindowRatio) {
+    public TestLeaseCoordinator(long leaseDurationMs, double renewalWindowRatio) {
         this.leaseDurationMs = leaseDurationMs;
         this.renewalWindowRatio = renewalWindowRatio;
         this.fencingSequenceGenerator = new AtomicLong(0);

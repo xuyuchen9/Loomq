@@ -5,6 +5,7 @@ import com.loomq.replication.server.ReplicaServer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -30,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * @author loomq
  * @since v0.4.8
  */
+@Tag("integration")
 @Timeout(value = 20, unit = TimeUnit.SECONDS) // 减少总超时: 30 -> 20
 class ReplicationIntegrationTest {
 

@@ -77,7 +77,7 @@ LoomQ 当前使用两层配置来源：
 
 | Key | 默认值 | 作用 | 生产建议 |
 |-----|--------|------|----------|
-| `scheduler.max_pending_tasks` | `1000000` | 最大待处理 Intent 数 | 按 heap 和恢复时长评估 |
+| `scheduler.max_pending_intents` | `1000000` | 最大待处理 Intent 数 | 按 heap 和恢复时长评估 |
 
 ### Dispatcher / Retry / Recovery
 
@@ -126,6 +126,6 @@ LoomQ 当前使用两层配置来源：
 ## 一点约定
 
 - 新增配置项时，优先补默认值和单位
-- 公共文档里优先使用 `Intent`，不要再把新文档写成 `task` 体系
+- 公共文档里优先使用 `Intent`，不要再把新文档写成旧语义体系
 - 如果某个配置尚未真正进入执行路径，要在文档里明确标成“预留”或“实验”
 - `loomq.data.dir` 当前作为 WAL 根目录覆盖项使用，优先级高于 `wal.data_dir`

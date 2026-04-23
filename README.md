@@ -9,7 +9,7 @@
 
 LoomQ is a durable time kernel for distributed systems. It focuses on scheduling, rescheduling, expiry, recovery, retry orchestration, and deadline handling.
 
-> **Note:** `Intent` is the public model. Some historical docs still use `task` terminology, but new material should prefer `Intent`.
+> **Note:** `Intent` is the public model. Some historical docs still use legacy terminology, but new material should prefer `Intent`.
 
 ## What LoomQ Is / Isn't
 

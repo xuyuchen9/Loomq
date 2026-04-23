@@ -47,6 +47,9 @@ public record ServerConfig(
         requirePositive(maxConnections, "maxConnections");
         requirePositive(writeBufferHighWaterMark, "writeBufferHighWaterMark");
         requirePositive(writeBufferLowWaterMark, "writeBufferLowWaterMark");
+        if (writeBufferLowWaterMark > writeBufferHighWaterMark) {
+            throw new IllegalArgumentException("writeBufferLowWaterMark must be <= writeBufferHighWaterMark");
+        }
         requirePositive(maxConcurrentBusinessRequests, "maxConcurrentBusinessRequests");
         requirePositive(gracefulShutdownTimeoutMs, "gracefulShutdownTimeoutMs");
     }

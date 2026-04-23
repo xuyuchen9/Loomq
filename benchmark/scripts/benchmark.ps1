@@ -3,7 +3,7 @@
     LoomQ Performance Benchmark Test Script
 
 .DESCRIPTION
-    Run atomic performance tests for LoomQ delayed task queue.
+    Run atomic performance tests for LoomQ delayed intent queue.
 
 .PARAMETER InternalOnly
     Run only internal component tests (no server required)
@@ -214,7 +214,7 @@ function Test-Java {
 # 显示帮助
 if ($Help) {
     Write-Host @"
-LoomQ Performance Benchmark v0.7.0
+LoomQ Performance Benchmark v0.7.1
 
 Usage: .\benchmark.ps1 [Options]
 
@@ -241,7 +241,7 @@ Examples:
 # 横幅
 Write-Host ""
 Write-Host "+============================================================+" -ForegroundColor Magenta
-Write-Host "|          LoomQ Atomic Performance Benchmark v0.7.0         |" -ForegroundColor Magenta
+Write-Host "|          LoomQ Atomic Performance Benchmark v0.7.1         |" -ForegroundColor Magenta
 Write-Host "+============================================================+" -ForegroundColor Magenta
 Write-Host ""
 

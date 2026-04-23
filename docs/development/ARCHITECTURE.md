@@ -1,6 +1,6 @@
 # LoomQ Architecture
 
-This document describes the current codebase structure, not the historical task-oriented version.
+This document describes the current codebase structure, not the historical legacy version.
 
 ## High-Level Layers
 

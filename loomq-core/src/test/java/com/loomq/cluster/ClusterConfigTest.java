@@ -94,6 +94,18 @@ class ClusterConfigTest {
     }
 
     @Test
+    @DisplayName("应检测 shard 索引越界")
+    void detectShardIndexOutOfRange() {
+        List<ClusterConfig.NodeConfig> nodes = List.of(
+                new ClusterConfig.NodeConfig("shard-0", "localhost", 8080, 100),
+                new ClusterConfig.NodeConfig("shard-2", "localhost", 8081, 100)
+        );
+
+        assertThrows(IllegalArgumentException.class,
+                () -> new ClusterConfig("test", 2, 0, nodes, false, 60000));
+    }
+
+    @Test
     @DisplayName("应从配置文件加载")
     void loadFromFile() throws IOException {
         String yaml = """
@@ -183,13 +195,17 @@ class ClusterConfigTest {
         assertThrows(IllegalArgumentException.class,
                 () -> new ClusterConfig.NodeConfig("shard-0", "localhost", 8080, 0));
 
-        // null shardId
-        assertThrows(NullPointerException.class,
+        // null / blank shardId
+        assertThrows(IllegalArgumentException.class,
                 () -> new ClusterConfig.NodeConfig(null, "localhost", 8080, 100));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ClusterConfig.NodeConfig("   ", "localhost", 8080, 100));
 
-        // null host
-        assertThrows(NullPointerException.class,
+        // null / blank host
+        assertThrows(IllegalArgumentException.class,
                 () -> new ClusterConfig.NodeConfig("shard-0", null, 8080, 100));
+        assertThrows(IllegalArgumentException.class,
+                () -> new ClusterConfig.NodeConfig("shard-0", "   ", 8080, 100));
     }
 
     @Test

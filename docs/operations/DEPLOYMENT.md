@@ -142,7 +142,7 @@ data:
       data_dir: "/data/wal"
       flush_strategy: "batch"
     scheduler:
-      max_pending_tasks: 1000000
+      max_pending_intents: 1000000
 ```
 
 ### Example Deployment
@@ -209,9 +209,13 @@ Point Prometheus at the standalone server and scrape the metrics endpoint. Usefu
 - `loomq_http_concurrency_limit_exceeded_total`
 - `loomq_netty_active_connections`
 - `loomq_netty_connection_errors_total`
-- `loomq_tasks_created_total`
+- `loomq_intents_created_total`
+- `loomq_intents_ack_success_total`
+- `loomq_intents_pending`
+- `loomq_scheduler_max_pending_intents`
 - `loomq_wal_record_count`
 - `loomq_scheduler_bucket_size`
+- `loomq_scheduler_wakeup_latency_ms_p95`
 - `loomq_scheduler_wakeup_latency_ms_p99`
 - `loomq_scheduler_wakeup_latency_ms_p999`
 
@@ -241,7 +245,7 @@ Point Prometheus at the standalone server and scrape the metrics endpoint. Usefu
 | `LOOMQ_NETTY_HOST` | `0.0.0.0` | Netty bind address |
 | `LOOMQ_WAL_DATA_DIR` | `./data/wal` | WAL data directory |
 | `LOOMQ_WAL_FLUSH_STRATEGY` | `batch` | WAL flush strategy |
-| `LOOMQ_SCHEDULER_MAX_PENDING` | `1000000` | Maximum pending intents |
+| `LOOMQ_SCHEDULER_MAX_PENDING_INTENTS` | `1000000` | Maximum pending intents |
 | `LOOMQ_DISPATCHER_MAX_CONCURRENT` | `1000` | Concurrent dispatch limit |
 | `LOOMQ_SHARD_INDEX` | `0` | Cluster shard index placeholder |
 | `LOOMQ_TOTAL_SHARDS` | `1` | Total shards placeholder |

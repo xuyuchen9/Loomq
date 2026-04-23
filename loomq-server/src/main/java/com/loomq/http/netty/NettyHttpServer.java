@@ -11,6 +11,7 @@ import io.netty.channel.ChannelOption;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.ServerChannel;
+import io.netty.channel.WriteBufferWaterMark;
 import io.netty.channel.epoll.Epoll;
 import io.netty.channel.epoll.EpollEventLoopGroup;
 import io.netty.channel.epoll.EpollServerSocketChannel;
@@ -97,8 +98,10 @@ public class NettyHttpServer {
             .childOption(ChannelOption.SO_KEEPALIVE, true)
             .childOption(ChannelOption.ALLOCATOR,
                 config.pooledAllocator() ? PooledByteBufAllocator.DEFAULT : ByteBufAllocator.DEFAULT)
-            .childOption(ChannelOption.WRITE_BUFFER_HIGH_WATER_MARK, config.writeBufferHighWaterMark())
-            .childOption(ChannelOption.WRITE_BUFFER_LOW_WATER_MARK, config.writeBufferLowWaterMark())
+            .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK,
+                new WriteBufferWaterMark(
+                    config.writeBufferLowWaterMark(),
+                    config.writeBufferHighWaterMark()))
             .childHandler(new ChannelInitializer<>() {
                 @Override
                 protected void initChannel(Channel ch) {
@@ -141,7 +144,7 @@ public class NettyHttpServer {
 
         // 1. 停止接受新连接
         if (serverChannel != null) {
-            serverChannel.close().awaitUninterruptibly();
+            serverChannel.close().syncUninterruptibly();
         }
 
         // 2. 等待现有业务处理完成

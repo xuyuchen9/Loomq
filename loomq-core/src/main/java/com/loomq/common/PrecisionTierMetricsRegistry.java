@@ -149,10 +149,10 @@ final class PrecisionTierMetricsRegistry {
         }
         sb.append("\n");
 
-        sb.append("# HELP loomq_scheduler_wakeup_late_ms_p95 P95 wakeup latency by precision tier\n");
-        sb.append("# TYPE loomq_scheduler_wakeup_late_ms_p95 gauge\n");
+        sb.append("# HELP loomq_scheduler_wakeup_latency_ms_p95 P95 wakeup latency by precision tier\n");
+        sb.append("# TYPE loomq_scheduler_wakeup_latency_ms_p95 gauge\n");
         for (PrecisionTier tier : precisionTierCatalog.supportedTiers()) {
-            sb.append("loomq_scheduler_wakeup_late_ms_p95{precision_tier=\"")
+            sb.append("loomq_scheduler_wakeup_latency_ms_p95{precision_tier=\"")
               .append(tier.name().toLowerCase())
               .append("\"} ")
               .append(calculateP95WakeupLatencyByTier(tier))

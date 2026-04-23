@@ -43,6 +43,7 @@ public class LoomqServerApplication {
         WalConfig walConfig = config.getWalConfig().withDataDir(dataDir);
 
         MetricsCollector.getInstance().setWalDataDir(dataDir);
+        MetricsCollector.getInstance().setSchedulerMaxPendingIntents(config.getSchedulerConfig().maxPendingIntents());
         logRuntimeConfiguration(config, nodeId, dataDir, walConfig);
 
         HttpCallbackHandler callbackHandler = new HttpCallbackHandler();
@@ -174,17 +175,17 @@ public class LoomqServerApplication {
     }
 
     private static void printBanner() {
-        System.out.println();
-        System.out.println("██╗      ██████╗  ██████╗ ███╗   ███╗ ██████╗ ");
-        System.out.println("██║     ██╔═══██╗██╔═══██╗████╗ ████║██╔═══██╗");
-        System.out.println("██║     ██║   ██║██║   ██║██╔████╔██║██║   ██║");
-        System.out.println("██║     ██║   ██║██║   ██║██║╚██╔╝██║██║▄▄ ██║");
-        System.out.println("███████╗╚██████╔╝╚██████╔╝██║ ╚═╝ ██║╚██████╔╝");
-        System.out.println("╚══════╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝ ╚══▀▀═╝ ");
-        System.out.println();
-        System.out.println(" Event Infrastructure for Delayed Execution");
-        System.out.println("              Version 0.7.0");
-        System.out.println("              Mode: Server (Netty)");
-        System.out.println();
+        logger.info("");
+        logger.info("██╗      ██████╗  ██████╗ ███╗   ███╗ ██████╗ ");
+        logger.info("██║     ██╔═══██╗██╔═══██╗████╗ ████║██╔═══██╗");
+        logger.info("██║     ██║   ██║██║   ██║██╔████╔██║██║   ██║");
+        logger.info("██║     ██║   ██║██║   ██║██║╚██╔╝██║██║▄▄ ██║");
+        logger.info("███████╗╚██████╔╝╚██████╔╝██║ ╚═╝ ██║╚██████╔╝");
+        logger.info("╚══════╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝ ╚══▀▀═╝ ");
+        logger.info("");
+        logger.info(" Event Infrastructure for Delayed Execution");
+        logger.info("              Version 0.7.0-SNAPSHOT");
+        logger.info("              Mode: Server (Netty)");
+        logger.info("");
     }
 }

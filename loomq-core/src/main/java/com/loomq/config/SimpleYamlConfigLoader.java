@@ -20,6 +20,7 @@ import java.util.regex.Pattern;
  * <ul>
  *   <li>nested mappings with 2-space indentation</li>
  *   <li>simple scalar lists</li>
+ *   <li>lists of maps with indexed flattening</li>
  *   <li>inline scalar lists such as {@code [1, 2, 3]}</li>
  *   <li>quoted and unquoted scalar values</li>
  *   <li>`${ENV:default}` placeholder expansion</li>
@@ -132,6 +133,9 @@ public final class SimpleYamlConfigLoader {
 
     private static int parseList(List<Line> lines, int index, int indent, String key, Properties target) {
         List<String> values = new ArrayList<>();
+        boolean sawScalarItem = false;
+        boolean sawMapItem = false;
+        int itemIndex = 0;
         while (index < lines.size()) {
             Line line = lines.get(index);
             if (line.indent() < indent) {
@@ -146,14 +150,111 @@ public final class SimpleYamlConfigLoader {
 
             String item = line.content().substring(1).trim();
             if (item.isEmpty()) {
-                throw new IllegalArgumentException("Empty list item at line " + line.number());
+                sawMapItem = true;
+                index = parseBlock(lines, index + 1, indent + 2, key + "[" + itemIndex + "]", target);
+                itemIndex++;
+                continue;
             }
+
+            int colonIndex = findTopLevelMapSeparator(item);
+            if (colonIndex >= 0) {
+                sawMapItem = true;
+                String itemPrefix = key + "[" + itemIndex + "]";
+                String childKey = item.substring(0, colonIndex).trim();
+                String childValue = item.substring(colonIndex + 1).trim();
+                if (childKey.isEmpty()) {
+                    throw new IllegalArgumentException("Empty list map key at line " + line.number());
+                }
+                target.setProperty(itemPrefix + "." + childKey, parseScalar(childValue));
+
+                int nextIndex = index + 1;
+                if (nextIndex < lines.size() && lines.get(nextIndex).indent() > indent) {
+                    index = parseBlock(lines, nextIndex, indent + 2, itemPrefix, target);
+                } else {
+                    index = nextIndex;
+                }
+                itemIndex++;
+                continue;
+            }
+
+            sawScalarItem = true;
             values.add(parseScalar(item));
+            itemIndex++;
             index++;
+        }
+
+        if (sawScalarItem && sawMapItem) {
+            throw new IllegalArgumentException("Mixed scalar and map items in list: " + key);
+        }
+
+        if (sawMapItem) {
+            if (itemIndex == 0) {
+                target.setProperty(key, "");
+            }
+            return index;
         }
 
         target.setProperty(key, String.join(",", values));
         return index;
+    }
+
+    private static int findTopLevelMapSeparator(String value) {
+        boolean inSingle = false;
+        boolean inDouble = false;
+        int braceDepth = 0;
+        int bracketDepth = 0;
+
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+
+            if (c == '\\' && (inSingle || inDouble) && i + 1 < value.length()) {
+                i++;
+                continue;
+            }
+
+            if (c == '\'' && !inDouble) {
+                inSingle = !inSingle;
+                continue;
+            }
+
+            if (c == '"' && !inSingle) {
+                inDouble = !inDouble;
+                continue;
+            }
+
+            if (inSingle || inDouble) {
+                continue;
+            }
+
+            if (c == '{') {
+                braceDepth++;
+                continue;
+            }
+            if (c == '}') {
+                if (braceDepth > 0) {
+                    braceDepth--;
+                }
+                continue;
+            }
+            if (c == '[') {
+                bracketDepth++;
+                continue;
+            }
+            if (c == ']') {
+                if (bracketDepth > 0) {
+                    bracketDepth--;
+                }
+                continue;
+            }
+
+            if (c == ':' && braceDepth == 0 && bracketDepth == 0) {
+                if (i + 1 >= value.length() || Character.isWhitespace(value.charAt(i + 1))) {
+                    return i;
+                }
+            }
+        }
+
+        return -1;
     }
 
     private static String parseScalar(String rawValue) {

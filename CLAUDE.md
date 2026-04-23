@@ -51,7 +51,7 @@ loomq-server (Netty HTTP + JSON + webhook delivery)
 
 ## Key Design Decisions
 
-- **"Intent" is the public model** — older docs/code may say "task"; always use "Intent" in new code.
+- **"Intent" is the public model** — older docs/code may use legacy terminology; always use "Intent" in new code.
 - **Core has zero HTTP/JSON dependencies** — `loomq-core` depends only on SLF4J, Owner, SnakeYAML, HdrHistogram. All transport concerns live in `loomq-server`.
 - **DeliveryHandler SPI** — the scheduler in core delegates delivery through this interface; `loomq-server` provides `HttpDeliveryHandler`. Embedders supply their own.
 - **Virtual threads everywhere** — `Executors.newVirtualThreadPerTaskExecutor()` for intent sleep/dispatch; no traditional thread pool tuning.

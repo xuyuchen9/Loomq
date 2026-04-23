@@ -63,6 +63,29 @@ class SimpleYamlConfigLoaderTest {
         }
     }
 
+    @Test
+    void parsesListOfMapsWithIndexedKeys() {
+        Properties properties = SimpleYamlConfigLoader.load("""
+            cluster:
+              name: loomq-cluster
+              nodes:
+                - shard_id: shard-0
+                  host: localhost
+                  port: 8080
+                  weight: 100
+                - shard_id: shard-1
+                  host: localhost
+                  port: 8081
+                  weight: 120
+            """);
+
+        assertEquals("loomq-cluster", properties.getProperty("cluster.name"));
+        assertEquals("shard-0", properties.getProperty("cluster.nodes[0].shard_id"));
+        assertEquals("localhost", properties.getProperty("cluster.nodes[0].host"));
+        assertEquals("8080", properties.getProperty("cluster.nodes[0].port"));
+        assertEquals("120", properties.getProperty("cluster.nodes[1].weight"));
+    }
+
     private static void restoreProperty(String key, String value) {
         if (value == null) {
             System.clearProperty(key);

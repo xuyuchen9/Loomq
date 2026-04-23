@@ -19,12 +19,17 @@ final class RuntimeMetricsRegistry {
     private volatile int walSegmentCount = 0;
     private volatile long walRecordCount = 0;
     private volatile String walDataDir;
+    private volatile long schedulerMaxPendingIntents = 1_000_000;
 
     private final AtomicLong pendingIntents = new AtomicLong(0);
     private final ConcurrentHashMap<String, AtomicLong> intentStatus = new ConcurrentHashMap<>();
 
     void setWalDataDir(String walDataDir) {
         this.walDataDir = walDataDir;
+    }
+
+    void setSchedulerMaxPendingIntents(long maxPendingIntents) {
+        this.schedulerMaxPendingIntents = maxPendingIntents;
     }
 
     void recordRecovery(long durationMs, long intentsRecovered) {
@@ -69,6 +74,10 @@ final class RuntimeMetricsRegistry {
 
     long getRecoveryDurationMs() {
         return recoveryDurationMs.get();
+    }
+
+    long getSchedulerMaxPendingIntents() {
+        return schedulerMaxPendingIntents;
     }
 
     void updatePendingIntents(long count) {
@@ -120,6 +129,11 @@ final class RuntimeMetricsRegistry {
         sb.append("# HELP loomq_wal_record_count Total WAL records written\n");
         sb.append("# TYPE loomq_wal_record_count counter\n");
         sb.append(formatMetric("loomq_wal_record_count", walRecordCount));
+        sb.append("\n");
+
+        sb.append("# HELP loomq_scheduler_max_pending_intents Maximum pending intents configured for the scheduler\n");
+        sb.append("# TYPE loomq_scheduler_max_pending_intents gauge\n");
+        sb.append(formatMetric("loomq_scheduler_max_pending_intents", schedulerMaxPendingIntents));
         sb.append("\n");
     }
 

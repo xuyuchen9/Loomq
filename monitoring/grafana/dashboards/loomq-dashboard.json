@@ -15,7 +15,7 @@
       }
     ]
   },
-  "description": "LoomQ Delayed Task Queue Dashboard",
+  "description": "LoomQ Delayed Intent Queue Dashboard",
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
@@ -68,7 +68,7 @@
       "pluginVersion": "10.3.0",
       "targets": [
         {
-          "expr": "loomq_scheduler_pending_count / loomq_scheduler_max_pending_tasks",
+          "expr": "loomq_intents_pending / loomq_scheduler_max_pending_intents",
           "refId": "A"
         }
       ],
@@ -121,17 +121,17 @@
       },
       "targets": [
         {
-          "expr": "rate(loomq_tasks_created_total[5m])",
+          "expr": "rate(loomq_intents_created_total[5m])",
           "legendFormat": "Create Rate",
           "refId": "A"
         },
         {
-          "expr": "rate(loomq_tasks_dispatched_total[5m])",
-          "legendFormat": "Dispatch Rate",
+          "expr": "rate(loomq_intents_ack_success_total[5m])",
+          "legendFormat": "Ack Success Rate",
           "refId": "B"
         }
       ],
-      "title": "Task Throughput",
+      "title": "Intent Throughput",
       "type": "timeseries"
     },
     {
@@ -201,7 +201,7 @@
   ],
   "refresh": "30s",
   "schemaVersion": 39,
-  "tags": ["loomq", "queue", "delayed-tasks"],
+  "tags": ["loomq", "queue", "delayed-intents"],
   "templating": {
     "list": [
       {

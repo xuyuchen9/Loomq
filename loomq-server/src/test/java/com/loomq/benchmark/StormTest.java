@@ -2,6 +2,7 @@ package com.loomq.benchmark;
 
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
@@ -299,7 +300,7 @@ public class StormTest {
             intentId, delayMs
         );
 
-        URL url = new URL(BASE_URL + "/intents");
+        URL url = URI.create(BASE_URL + "/intents").toURL();
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setRequestMethod("POST");
         conn.setRequestProperty("Content-Type", "application/json");
@@ -319,7 +320,7 @@ public class StormTest {
 
     private static void printMetrics() {
         try {
-            URL url = new URL(BASE_URL.replace("/api/v1", "") + "/metrics");
+            URL url = URI.create(BASE_URL.replace("/api/v1", "") + "/metrics").toURL();
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(5000);

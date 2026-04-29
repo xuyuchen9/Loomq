@@ -24,6 +24,11 @@ public class Intent {
     private final String intentId;
 
     /**
+     * 全链路追踪 ID (UUID 短码，用于 per-intent trace)
+     */
+    private final String traceId;
+
+    /**
      * 当前状态
      */
     private IntentStatus status;
@@ -121,6 +126,7 @@ public class Intent {
 
     public Intent() {
         this.intentId = generateIntentId();
+        this.traceId = generateTraceId();
         this.status = IntentStatus.CREATED;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
@@ -132,6 +138,7 @@ public class Intent {
 
     public Intent(String intentId) {
         this.intentId = Objects.requireNonNullElse(intentId, generateIntentId());
+        this.traceId = generateTraceId();
         this.status = IntentStatus.CREATED;
         this.createdAt = Instant.now();
         this.updatedAt = this.createdAt;
@@ -175,6 +182,7 @@ public class Intent {
         this.tags = tags != null && !tags.isEmpty() ? Map.copyOf(tags) : null;
         this.attempts = attempts;
         this.lastDeliveryId = lastDeliveryId;
+        this.traceId = generateTraceId();
     }
 
     /**
@@ -255,7 +263,7 @@ public class Intent {
             case CREATED -> to == IntentStatus.SCHEDULED;
             case SCHEDULED -> to == IntentStatus.DUE || to == IntentStatus.CANCELED;
             case DUE -> to == IntentStatus.DISPATCHING || to == IntentStatus.CANCELED;
-            case DISPATCHING -> to == IntentStatus.DELIVERED || to == IntentStatus.DEAD_LETTERED || to == IntentStatus.SCHEDULED;
+            case DISPATCHING -> to == IntentStatus.DELIVERED || to == IntentStatus.DEAD_LETTERED || to == IntentStatus.SCHEDULED || to == IntentStatus.EXPIRED;
             case DELIVERED -> to == IntentStatus.ACKED || to == IntentStatus.EXPIRED;
             default -> false;
         };
@@ -300,6 +308,14 @@ public class Intent {
 
     public String getIntentId() {
         return intentId;
+    }
+
+    public String getTraceId() {
+        return traceId;
+    }
+
+    private static String generateTraceId() {
+        return UUID.randomUUID().toString().substring(0, 8);
     }
 
     public IntentStatus getStatus() {

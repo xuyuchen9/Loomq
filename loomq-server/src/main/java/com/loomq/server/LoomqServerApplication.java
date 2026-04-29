@@ -2,7 +2,7 @@ package com.loomq.server;
 
 import com.loomq.LoomqEngine;
 import com.loomq.callback.HttpCallbackHandler;
-import com.loomq.callback.HttpDeliveryHandler;
+import com.loomq.callback.NettyHttpDeliveryHandler;
 import com.loomq.config.LoomqConfig;
 import com.loomq.config.WalConfig;
 import com.loomq.config.ServerConfig;
@@ -52,7 +52,7 @@ public class LoomqServerApplication {
             .walDir(Path.of(dataDir))
             .walConfig(walConfig)
             .callbackHandler(callbackHandler)
-            .deliveryHandler(new HttpDeliveryHandler())
+            .deliveryHandler(new NettyHttpDeliveryHandler())
             .build();
 
         RadixRouter router = new RadixRouter();
@@ -185,7 +185,7 @@ public class LoomqServerApplication {
         logger.info("╚══════╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝ ╚══▀▀═╝ ");
         logger.info("");
         logger.info(" Event Infrastructure for Delayed Execution");
-        logger.info("              Version 0.7.0-SNAPSHOT");
+        logger.info("              Version 0.8.0-SNAPSHOT");
         logger.info("              Mode: Server (Netty)");
         logger.info("");
     }

@@ -8,12 +8,11 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Intent 实体 (v0.5)
+ * Intent 实体。
  *
  * Intent 是对外暴露的核心资源，代表一个未来必须触发的事件。
  *
  * @author loomq
- * @since v0.5.0
  */
 public class Intent {
 
@@ -256,7 +255,7 @@ public class Intent {
             case CREATED -> to == IntentStatus.SCHEDULED;
             case SCHEDULED -> to == IntentStatus.DUE || to == IntentStatus.CANCELED;
             case DUE -> to == IntentStatus.DISPATCHING || to == IntentStatus.CANCELED;
-            case DISPATCHING -> to == IntentStatus.DELIVERED || to == IntentStatus.DEAD_LETTERED;
+            case DISPATCHING -> to == IntentStatus.DELIVERED || to == IntentStatus.DEAD_LETTERED || to == IntentStatus.SCHEDULED;
             case DELIVERED -> to == IntentStatus.ACKED || to == IntentStatus.EXPIRED;
             default -> false;
         };

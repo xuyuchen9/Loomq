@@ -1,29 +1,29 @@
 package com.loomq.cluster;
 
+import com.loomq.config.ConfigSupport;
+import com.loomq.config.SimpleYamlConfigLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.Locale;
+import java.util.Properties;
+import java.util.TreeSet;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
- * 集群配置管理
+ * 集群配置管理。
  *
  * 管理分片集群的配置信息，支持：
  * 1. 从配置文件加载
@@ -49,11 +49,11 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * </pre>
  *
  * @author loomq
- * @since v0.3
  */
 public class ClusterConfig {
 
     private static final Logger logger = LoggerFactory.getLogger(ClusterConfig.class);
+    private static final Pattern NODE_INDEX_PATTERN = Pattern.compile("^cluster\\.nodes\\[(\\d+)\\]\\.(.+)$");
 
     // 默认配置文件路径
     public static final String DEFAULT_CONFIG_PATH = "cluster.yml";
@@ -88,7 +88,7 @@ public class ClusterConfig {
      */
     public ClusterConfig(String clusterName, int totalShards, int localShardIndex,
                          List<NodeConfig> nodes, boolean hotReloadEnabled, long hotReloadIntervalMs) {
-        this.clusterName = Objects.requireNonNull(clusterName, "clusterName cannot be null");
+        this.clusterName = requireNonBlank(clusterName, "clusterName");
         this.totalShards = validatePositive(totalShards, "totalShards");
         this.localShardIndex = validateRange(localShardIndex, 0, totalShards - 1, "localShardIndex");
         this.nodes = List.copyOf(Objects.requireNonNull(nodes, "nodes cannot be null"));
@@ -119,12 +119,12 @@ public class ClusterConfig {
                 throw new IOException("Config file not found: " + path);
             }
             try (is) {
-                return parseYaml(is);
+                return fromProperties(SimpleYamlConfigLoader.load(is));
             }
         }
 
         try (InputStream is = Files.newInputStream(configPath)) {
-            return parseYaml(is);
+            return fromProperties(SimpleYamlConfigLoader.load(is));
         }
     }
 
@@ -133,14 +133,25 @@ public class ClusterConfig {
      */
     public static ClusterConfig fromEnv() {
         String clusterName = getEnv("CLUSTER_NAME", "loomq-cluster");
-        int totalShards = getEnvInt("TOTAL_SHARDS", 1);
-        int localShardIndex = getEnvInt("SHARD_INDEX", 0);
+        String rawLocalShardIndex = getRawEnv("SHARD_INDEX");
+        int localShardIndex = rawLocalShardIndex != null && !rawLocalShardIndex.isBlank()
+                ? parseEnvIntField("SHARD_INDEX", rawLocalShardIndex, "shard index")
+                : 0;
         boolean hotReload = getEnvBool("HOT_RELOAD", false);
         long reloadInterval = getEnvLong("RELOAD_INTERVAL_MS", 60000);
 
         // 解析节点列表（格式：shard-0:localhost:8080:100,shard-1:localhost:8081:100）
         List<NodeConfig> nodes = parseNodesFromEnv(
                 getEnv("NODES", String.format("shard-%d:localhost:8080:100", localShardIndex)));
+
+        String rawTotalShards = getRawEnv("TOTAL_SHARDS");
+        int totalShards = rawTotalShards != null && !rawTotalShards.isBlank()
+                ? parseEnvIntField("TOTAL_SHARDS", rawTotalShards, "total shards")
+                : inferTotalShards(nodes);
+
+        if (rawLocalShardIndex == null || rawLocalShardIndex.isBlank()) {
+            localShardIndex = inferLocalShardIndex(nodes);
+        }
 
         return new ClusterConfig(clusterName, totalShards, localShardIndex, nodes, hotReload, reloadInterval);
     }
@@ -150,8 +161,7 @@ public class ClusterConfig {
      */
     public static ClusterConfig loadDefault() {
         try {
-            // 先检查环境变量是否设置了基本配置
-            if (System.getenv(ENV_PREFIX + "SHARD_INDEX") != null) {
+            if (hasEnvOverrides()) {
                 logger.info("Loading config from environment variables");
                 return fromEnv();
             }
@@ -278,9 +288,19 @@ public class ClusterConfig {
         }
 
         Set<String> shardIds = new HashSet<>();
+        Set<Integer> shardIndexes = new HashSet<>();
         for (NodeConfig node : nodes) {
             if (!shardIds.add(node.shardId())) {
                 throw new IllegalArgumentException("Duplicate shardId: " + node.shardId());
+            }
+
+            int shardIndex = ClusterRoutingPlanner.parseShardIndex(node.shardId());
+            if (shardIndex < 0 || shardIndex >= totalShards) {
+                throw new IllegalArgumentException(
+                        "Node shardId out of range for totalShards: " + node.shardId());
+            }
+            if (!shardIndexes.add(shardIndex)) {
+                throw new IllegalArgumentException("Duplicate shardIndex: " + shardIndex);
             }
         }
 
@@ -305,252 +325,99 @@ public class ClusterConfig {
         return value;
     }
 
-    // 配置解析
-    private static ClusterConfig parseYaml(InputStream is) throws IOException {
-        Map<String, String> clusterValues = new HashMap<>();
-        List<Map<String, String>> nodeValues = new ArrayList<>();
-        Map<String, String> currentNode = null;
-        boolean seenClusterSection = false;
-        boolean seenNodesSection = false;
-
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
-            String rawLine;
-            int lineNumber = 0;
-
-            while ((rawLine = reader.readLine()) != null) {
-                lineNumber++;
-
-                String line = stripComment(rawLine).stripTrailing();
-                if (line.isBlank()) {
-                    continue;
-                }
-
-                int indent = countLeadingSpaces(line);
-                if (indent % 2 != 0) {
-                    throw new IllegalArgumentException("Invalid indentation at line " + lineNumber);
-                }
-
-                int level = indent / 2;
-                String trimmed = line.substring(indent).trim();
-
-                if (level == 0) {
-                    if (!"cluster:".equals(trimmed)) {
-                        throw new IllegalArgumentException("Expected 'cluster:' at line " + lineNumber);
-                    }
-                    seenClusterSection = true;
-                    currentNode = null;
-                    continue;
-                }
-
-                if (!seenClusterSection) {
-                    throw new IllegalArgumentException("Content found before 'cluster:' section at line " + lineNumber);
-                }
-
-                if (level == 1) {
-                    currentNode = null;
-                    if ("nodes:".equals(trimmed)) {
-                        if (seenNodesSection) {
-                            throw new IllegalArgumentException("Duplicate 'nodes' section at line " + lineNumber);
-                        }
-                        seenNodesSection = true;
-                        continue;
-                    }
-                    putKeyValue(clusterValues, trimmed, lineNumber, "cluster");
-                    continue;
-                }
-
-                if (!seenNodesSection) {
-                    throw new IllegalArgumentException("Node entry found before nodes section at line " + lineNumber);
-                }
-
-                if (level == 2) {
-                    if (!trimmed.startsWith("-")) {
-                        throw new IllegalArgumentException("Expected node list item at line " + lineNumber);
-                    }
-                    currentNode = new HashMap<>();
-                    nodeValues.add(currentNode);
-
-                    String entry = trimmed.substring(1).trim();
-                    if (!entry.isEmpty()) {
-                        putKeyValue(currentNode, entry, lineNumber, "node");
-                    }
-                    continue;
-                }
-
-                if (level == 3) {
-                    if (currentNode == null) {
-                        throw new IllegalArgumentException("Node attribute found before node entry at line " + lineNumber);
-                    }
-                    putKeyValue(currentNode, trimmed, lineNumber, "node");
-                    continue;
-                }
-
-                throw new IllegalArgumentException("Unsupported indentation at line " + lineNumber);
-            }
-        }
-
-        if (!seenClusterSection) {
-            throw new IllegalArgumentException("Missing 'cluster' section in config");
-        }
-
-        String name = defaultString(clusterValues.get("name"), "loomq-cluster");
-        int totalShards = parseIntValue(clusterValues.get("total_shards"), 1, "total_shards");
-        int localShardIndex = parseIntValue(clusterValues.get("local_shard_index"), 0, "local_shard_index");
-        boolean hotReload = parseBooleanValue(clusterValues.get("hot_reload"), false, "hot_reload");
-        long reloadInterval = parseLongValue(clusterValues.get("reload_interval_ms"), 60000L, "reload_interval_ms");
-
-        List<NodeConfig> nodes = new ArrayList<>();
-        for (Map<String, String> node : nodeValues) {
-            nodes.add(new NodeConfig(
-                    requiredString(node, "shard_id", "node"),
-                    requiredString(node, "host", "node"),
-                    parseIntValue(node.get("port"), 8080, "port"),
-                    parseIntValue(node.get("weight"), 100, "weight")
-            ));
-        }
-
-        return new ClusterConfig(name, totalShards, localShardIndex, nodes, hotReload, reloadInterval);
-    }
-
-    private static void putKeyValue(Map<String, String> target, String line, int lineNumber, String scope) {
-        int colonIndex = line.indexOf(':');
-        if (colonIndex < 0) {
-            throw new IllegalArgumentException("Expected key:value pair in " + scope + " at line " + lineNumber);
-        }
-
-        String key = line.substring(0, colonIndex).trim();
-        String value = line.substring(colonIndex + 1).trim();
-        if (key.isEmpty()) {
-            throw new IllegalArgumentException("Empty key in " + scope + " at line " + lineNumber);
-        }
-        target.put(key, unquote(value));
-    }
-
-    private static String requiredString(Map<String, String> values, String key, String scope) {
-        String value = values.get(key);
+    private static String requireNonBlank(String value, String name) {
         if (value == null || value.isBlank()) {
-            throw new IllegalArgumentException("Missing required " + scope + " field: " + key);
+            throw new IllegalArgumentException(name + " cannot be blank");
         }
-        return value;
+        return value.trim();
     }
 
-    private static String defaultString(String value, String defaultValue) {
-        return value == null || value.isBlank() ? defaultValue : value;
+    private static ClusterConfig fromProperties(Properties props) {
+        Properties source = props == null ? new Properties() : props;
+
+        String clusterName = ConfigSupport.string(source, "loomq-cluster", "cluster.name");
+        int totalShards = ConfigSupport.intValue(source, 1, "cluster.total_shards");
+        int localShardIndex = ConfigSupport.intValue(source, 0, "cluster.local_shard_index");
+        boolean hotReload = ConfigSupport.booleanValue(source, false, "cluster.hot_reload");
+        long reloadInterval = ConfigSupport.longValue(source, 60000L, "cluster.reload_interval_ms");
+
+        List<NodeConfig> nodes = parseNodeConfigs(source);
+        return new ClusterConfig(clusterName, totalShards, localShardIndex, nodes, hotReload, reloadInterval);
     }
 
-    private static int parseIntValue(String value, int defaultValue, String fieldName) {
+    private static List<NodeConfig> parseNodeConfigs(Properties props) {
+        Set<Integer> nodeIndexes = new TreeSet<>();
+        for (String key : props.stringPropertyNames()) {
+            Matcher matcher = NODE_INDEX_PATTERN.matcher(key);
+            if (matcher.matches()) {
+                nodeIndexes.add(Integer.parseInt(matcher.group(1)));
+            }
+        }
+
+        List<NodeConfig> nodes = new ArrayList<>(nodeIndexes.size());
+        for (Integer index : nodeIndexes) {
+            String base = "cluster.nodes[" + index + "]";
+            String shardId = requireProperty(props, base + ".shard_id");
+            String host = requireProperty(props, base + ".host");
+            int port = ConfigSupport.intValue(props, 8080, base + ".port");
+            int weight = ConfigSupport.intValue(props, 100, base + ".weight");
+            nodes.add(new NodeConfig(shardId, host, port, weight));
+        }
+
+        if (nodes.isEmpty()) {
+            throw new IllegalArgumentException("No cluster nodes found in config");
+        }
+
+        return nodes;
+    }
+
+    private static String requireProperty(Properties props, String key) {
+        String value = props.getProperty(key);
         if (value == null || value.isBlank()) {
-            return defaultValue;
+            throw new IllegalArgumentException("Missing required cluster field: " + key);
         }
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid integer for " + fieldName + ": " + value, e);
-        }
-    }
-
-    private static long parseLongValue(String value, long defaultValue, String fieldName) {
-        if (value == null || value.isBlank()) {
-            return defaultValue;
-        }
-        try {
-            return Long.parseLong(value);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("Invalid long for " + fieldName + ": " + value, e);
-        }
-    }
-
-    private static boolean parseBooleanValue(String value, boolean defaultValue, String fieldName) {
-        if (value == null || value.isBlank()) {
-            return defaultValue;
-        }
-
-        String normalized = value.toLowerCase(Locale.ROOT);
-        return switch (normalized) {
-            case "true", "1", "yes", "on" -> true;
-            case "false", "0", "no", "off" -> false;
-            default -> throw new IllegalArgumentException("Invalid boolean for " + fieldName + ": " + value);
-        };
-    }
-
-    private static String unquote(String value) {
-        if (value.length() >= 2) {
-            if ((value.startsWith("\"") && value.endsWith("\""))
-                    || (value.startsWith("'") && value.endsWith("'"))) {
-                return value.substring(1, value.length() - 1);
-            }
-        }
-        return value;
-    }
-
-    private static String stripComment(String line) {
-        boolean singleQuoted = false;
-        boolean doubleQuoted = false;
-        StringBuilder result = new StringBuilder(line.length());
-
-        for (int i = 0; i < line.length(); i++) {
-            char ch = line.charAt(i);
-
-            if (ch == '\'' && !doubleQuoted) {
-                singleQuoted = !singleQuoted;
-                result.append(ch);
-                continue;
-            }
-
-            if (ch == '"' && !singleQuoted) {
-                doubleQuoted = !doubleQuoted;
-                result.append(ch);
-                continue;
-            }
-
-            if (ch == '#' && !singleQuoted && !doubleQuoted) {
-                break;
-            }
-
-            result.append(ch);
-        }
-
-        return result.toString();
-    }
-
-    private static int countLeadingSpaces(String line) {
-        int count = 0;
-        while (count < line.length() && line.charAt(count) == ' ') {
-            count++;
-        }
-        return count;
+        return value.trim();
     }
 
     // 环境变量工具方法
     private static String getEnv(String key, String defaultValue) {
-        String value = System.getenv(ENV_PREFIX + key);
+        String value = getRawEnv(key);
         return value != null ? value : defaultValue;
     }
 
-    private static int getEnvInt(String key, int defaultValue) {
-        String value = System.getenv(ENV_PREFIX + key);
-        if (value == null) return defaultValue;
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
-
     private static long getEnvLong(String key, long defaultValue) {
-        String value = System.getenv(ENV_PREFIX + key);
-        if (value == null) return defaultValue;
+        String value = getRawEnv(key);
+        if (value == null || value.isBlank()) return defaultValue;
         try {
-            return Long.parseLong(value);
+            return Long.parseLong(value.trim());
         } catch (NumberFormatException e) {
-            return defaultValue;
+            throw new IllegalArgumentException("Invalid cluster env " + ENV_PREFIX + key + ": " + value, e);
         }
     }
 
     private static boolean getEnvBool(String key, boolean defaultValue) {
-        String value = System.getenv(ENV_PREFIX + key);
-        if (value == null) return defaultValue;
-        return Boolean.parseBoolean(value) || value.equals("1") || value.equalsIgnoreCase("yes");
+        String value = getRawEnv(key);
+        if (value == null || value.isBlank()) return defaultValue;
+
+        String normalized = value.trim().toLowerCase();
+        return switch (normalized) {
+            case "true", "1", "yes", "on" -> true;
+            case "false", "0", "no", "off" -> false;
+            default -> throw new IllegalArgumentException("Invalid cluster env " + ENV_PREFIX + key + ": " + value);
+        };
+    }
+
+    private static boolean hasEnvOverrides() {
+        return getRawEnv("CLUSTER_NAME") != null
+                || getRawEnv("TOTAL_SHARDS") != null
+                || getRawEnv("SHARD_INDEX") != null
+                || getRawEnv("HOT_RELOAD") != null
+                || getRawEnv("RELOAD_INTERVAL_MS") != null
+                || getRawEnv("NODES") != null;
+    }
+
+    private static String getRawEnv(String key) {
+        return System.getenv(ENV_PREFIX + key);
     }
 
     private static List<NodeConfig> parseNodesFromEnv(String envValue) {
@@ -562,16 +429,67 @@ public class ClusterConfig {
         // 格式：shard-0:localhost:8080:100,shard-1:localhost:8081:100
         String[] parts = envValue.split(",");
         for (String part : parts) {
-            String[] fields = part.split(":");
-            if (fields.length >= 3) {
-                String shardId = fields[0];
-                String host = fields[1];
-                int port = Integer.parseInt(fields[2]);
-                int weight = fields.length > 3 ? Integer.parseInt(fields[3]) : 100;
-                nodes.add(new NodeConfig(shardId, host, port, weight));
+            String entry = part.trim();
+            if (entry.isEmpty()) {
+                continue;
             }
+
+            String[] fields = entry.split(":");
+            if (fields.length < 3 || fields.length > 4) {
+                throw new IllegalArgumentException("Invalid cluster env " + ENV_PREFIX + "NODES: " + entry);
+            }
+
+            String shardId = fields[0].trim();
+            String host = fields[1].trim();
+            int port = parseEnvIntField("NODES", entry, fields[2], "port");
+            int weight = fields.length > 3
+                    ? parseEnvIntField("NODES", entry, fields[3], "weight")
+                    : 100;
+            nodes.add(new NodeConfig(shardId, host, port, weight));
         }
         return nodes;
+    }
+
+    private static int inferTotalShards(List<NodeConfig> nodes) {
+        int maxShardIndex = -1;
+        for (NodeConfig node : nodes) {
+            maxShardIndex = Math.max(maxShardIndex, parseShardIndex(node.shardId(), "cluster env NODES"));
+        }
+
+        return Math.max(maxShardIndex + 1, 1);
+    }
+
+    private static int inferLocalShardIndex(List<NodeConfig> nodes) {
+        if (nodes.isEmpty()) {
+            return 0;
+        }
+        return parseShardIndex(nodes.get(0).shardId(), "cluster env NODES");
+    }
+
+    private static int parseEnvIntField(String envKey, String value, String fieldName) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "Invalid cluster env " + ENV_PREFIX + envKey + " for " + fieldName + ": " + value, e);
+        }
+    }
+
+    private static int parseEnvIntField(String envKey, String entry, String rawValue, String fieldName) {
+        try {
+            return Integer.parseInt(rawValue.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    "Invalid cluster env " + ENV_PREFIX + envKey + " entry (" + fieldName + "): " + entry, e);
+        }
+    }
+
+    private static int parseShardIndex(String shardId, String scope) {
+        int shardIndex = ClusterRoutingPlanner.parseShardIndex(shardId);
+        if (shardIndex < 0) {
+            throw new IllegalArgumentException("Invalid shardId in " + scope + ": " + shardId);
+        }
+        return shardIndex;
     }
 
     /**
@@ -580,8 +498,8 @@ public class ClusterConfig {
     public record NodeConfig(String shardId, String host, int port, int weight) {
 
         public NodeConfig {
-            Objects.requireNonNull(shardId, "shardId cannot be null");
-            Objects.requireNonNull(host, "host cannot be null");
+            shardId = requireNonBlank(shardId, "shardId");
+            host = requireNonBlank(host, "host");
             if (port <= 0 || port > 65535) {
                 throw new IllegalArgumentException("Invalid port: " + port);
             }

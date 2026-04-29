@@ -1,11 +1,11 @@
-# LoomQ - High-Performance Delayed Task Queue
-# Java 25 Virtual Threads based distributed task scheduler
+# LoomQ - High-Performance Delayed Intent Queue
+# Java 25 Virtual Threads based distributed intent scheduler
 
-FROM eclipse-temurin:21-jdk-alpine
+FROM eclipse-temurin:25-jdk-alpine
 
 LABEL maintainer="loomq"
 LABEL version="0.7.0-SNAPSHOT"
-LABEL description="LoomQ Delayed Task Queue Engine"
+LABEL description="LoomQ Delayed Intent Queue Engine"
 
 # Install necessary tools
 RUN apk add --no-cache curl jq
@@ -27,7 +27,7 @@ ENV LOOMQ_SERVER_HOST=0.0.0.0
 ENV LOOMQ_SERVER_PORT=8080
 ENV LOOMQ_WAL_DATA_DIR=/app/data/wal
 ENV LOOMQ_WAL_FLUSH_STRATEGY=batch
-ENV LOOMQ_SCHEDULER_MAX_PENDING=1000000
+ENV LOOMQ_SCHEDULER_MAX_PENDING_INTENTS=1000000
 ENV LOOMQ_DISPATCHER_MAX_CONCURRENT=1000
 ENV JVM_XMS=2g
 ENV JVM_XMX=2g
@@ -53,7 +53,7 @@ ENTRYPOINT ["sh", "-c", \
     -Dloomq.server.port=${LOOMQ_SERVER_PORT} \
     -Dloomq.wal.data_dir=${LOOMQ_WAL_DATA_DIR} \
     -Dloomq.wal.flush_strategy=${LOOMQ_WAL_FLUSH_STRATEGY} \
-    -Dloomq.scheduler.max_pending_tasks=${LOOMQ_SCHEDULER_MAX_PENDING} \
+    -Dloomq.scheduler.max_pending_intents=${LOOMQ_SCHEDULER_MAX_PENDING_INTENTS} \
     -Dloomq.dispatcher.max_concurrent_dispatches=${LOOMQ_DISPATCHER_MAX_CONCURRENT} \
     -jar app.jar \
     --config=config/application.yml \

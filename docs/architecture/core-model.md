@@ -9,7 +9,7 @@ It focuses on one thing: making future events happen reliably, with persistence,
 | Term | Meaning in LoomQ |
 |------|------------------|
 | `Intent` | The durable scheduling record. This is the public model used by the API and the engine. |
-| `Task` | A legacy/public-facing synonym in older docs. Prefer `Intent` for new material. |
+| `Legacy term` | A legacy/public-facing synonym in older docs. Prefer `Intent` for new material. |
 | `Job` | A single execution attempt or delivery action derived from an `Intent`. |
 | `Deadline` | The latest acceptable completion time for an `Intent`. |
 | `Schedule` | The initial placement of an `Intent` into the time kernel. |

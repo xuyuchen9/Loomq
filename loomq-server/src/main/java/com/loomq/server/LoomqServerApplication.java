@@ -43,6 +43,7 @@ public class LoomqServerApplication {
         WalConfig walConfig = config.getWalConfig().withDataDir(dataDir);
 
         MetricsCollector.getInstance().setWalDataDir(dataDir);
+        MetricsCollector.getInstance().setSchedulerMaxPendingIntents(config.getSchedulerConfig().maxPendingIntents());
         logRuntimeConfiguration(config, nodeId, dataDir, walConfig);
 
         HttpCallbackHandler callbackHandler = new HttpCallbackHandler();
@@ -119,7 +120,7 @@ public class LoomqServerApplication {
     private static void logRuntimeConfiguration(LoomqConfig config, String nodeId, String dataDir, WalConfig walConfig) {
         ServerConfig serverConfig = config.getServerConfig();
         logger.info(
-            "Runtime config: nodeId={}, dataDir={}, server={}:{} backlog={} virtualThreads={} maxRequestSize={} threadPoolSize={}, netty={}:{} epoll={} pooledAllocator={} maxConnections={} maxConcurrentRequests={}, walDir={}, walEngine={}, walFlushStrategy={}, walFlushThresholdKb={}, walStripeCount={}, schedulerMaxPendingIntents={}, recoveryBatchSize={}, retryInitialDelayMs={}, retryMaxDelayMs={}",
+            "Runtime config: nodeId={}, dataDir={}, server={}:{} backlog={} virtualThreads={} maxRequestSize={} threadPoolSize={}, netty={}:{} epoll={} pooledAllocator={} maxConnections={} maxConcurrentRequests={} httpSemaphoreTimeoutMs={}, walDir={}, walEngine={}, walFlushStrategy={}, walFlushThresholdKb={}, walStripeCount={}, schedulerMaxPendingIntents={}, recoveryBatchSize={}, retryInitialDelayMs={}, retryMaxDelayMs={}",
             nodeId,
             dataDir,
             serverConfig.host(),
@@ -134,6 +135,7 @@ public class LoomqServerApplication {
             serverConfig.pooledAllocator(),
             serverConfig.maxConnections(),
             serverConfig.maxConcurrentBusinessRequests(),
+            serverConfig.httpSemaphoreTimeoutMs(),
             walConfig.dataDir(),
             walConfig.engine(),
             walConfig.flushStrategy(),
@@ -174,17 +176,17 @@ public class LoomqServerApplication {
     }
 
     private static void printBanner() {
-        System.out.println();
-        System.out.println("██╗      ██████╗  ██████╗ ███╗   ███╗ ██████╗ ");
-        System.out.println("██║     ██╔═══██╗██╔═══██╗████╗ ████║██╔═══██╗");
-        System.out.println("██║     ██║   ██║██║   ██║██╔████╔██║██║   ██║");
-        System.out.println("██║     ██║   ██║██║   ██║██║╚██╔╝██║██║▄▄ ██║");
-        System.out.println("███████╗╚██████╔╝╚██████╔╝██║ ╚═╝ ██║╚██████╔╝");
-        System.out.println("╚══════╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝ ╚══▀▀═╝ ");
-        System.out.println();
-        System.out.println(" Event Infrastructure for Delayed Execution");
-        System.out.println("              Version 0.7.0");
-        System.out.println("              Mode: Server (Netty)");
-        System.out.println();
+        logger.info("");
+        logger.info("██╗      ██████╗  ██████╗ ███╗   ███╗ ██████╗ ");
+        logger.info("██║     ██╔═══██╗██╔═══██╗████╗ ████║██╔═══██╗");
+        logger.info("██║     ██║   ██║██║   ██║██╔████╔██║██║   ██║");
+        logger.info("██║     ██║   ██║██║   ██║██║╚██╔╝██║██║▄▄ ██║");
+        logger.info("███████╗╚██████╔╝╚██████╔╝██║ ╚═╝ ██║╚██████╔╝");
+        logger.info("╚══════╝ ╚═════╝  ╚═════╝ ╚═╝     ╚═╝ ╚══▀▀═╝ ");
+        logger.info("");
+        logger.info(" Event Infrastructure for Delayed Execution");
+        logger.info("              Version 0.7.0-SNAPSHOT");
+        logger.info("              Mode: Server (Netty)");
+        logger.info("");
     }
 }

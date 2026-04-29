@@ -37,6 +37,10 @@ public class MetricsCollector {
         runtimeMetrics.setWalDataDir(walDataDir);
     }
 
+    public void setSchedulerMaxPendingIntents(long maxPendingIntents) {
+        runtimeMetrics.setSchedulerMaxPendingIntents(maxPendingIntents);
+    }
+
     // ========== 计数器更新 ==========
 
     public void incrementIntentsCreated() {
@@ -126,6 +130,41 @@ public class MetricsCollector {
      */
     public void incrementBackpressureEvent(PrecisionTier tier) {
         tierMetrics.incrementBackpressureEvent(tier);
+    }
+
+    /**
+     * 记录 dispatch 队列 offer 失败（队满）
+     */
+    public void incrementDispatchQueueOfferFailed(PrecisionTier tier) {
+        tierMetrics.incrementDispatchQueueOfferFailed(tier);
+    }
+
+    /**
+     * 记录 dispatch 队列信号量重试
+     */
+    public void incrementDispatchQueueRetry(PrecisionTier tier) {
+        tierMetrics.incrementDispatchQueueRetry(tier);
+    }
+
+    /**
+     * 记录 dispatch 队列最终放弃的 batch
+     */
+    public void incrementDispatchQueueAbandoned(PrecisionTier tier) {
+        tierMetrics.incrementDispatchQueueAbandoned(tier);
+    }
+
+    /**
+     * 更新 dispatch 队列深度
+     */
+    public void updateDispatchQueueSizeByTier(PrecisionTier tier, long size) {
+        tierMetrics.updateDispatchQueueSizeByTier(tier, size);
+    }
+
+    /**
+     * 记录 due→dispatch lag
+     */
+    public void recordDispatchQueueLagByTier(PrecisionTier tier, long lagMs) {
+        tierMetrics.recordDispatchQueueLagByTier(tier, lagMs);
     }
 
     /**
@@ -307,6 +346,10 @@ public class MetricsCollector {
 
     public long getRecoveryDurationMs() {
         return runtimeMetrics.getRecoveryDurationMs();
+    }
+
+    public long getSchedulerMaxPendingIntents() {
+        return runtimeMetrics.getSchedulerMaxPendingIntents();
     }
 
     // ========== 系统状态更新 (从 LoomQMetrics 迁移) ==========

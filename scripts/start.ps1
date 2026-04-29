@@ -1,6 +1,6 @@
 #
 # LoomQ Startup Script (Windows PowerShell)
-# Version: 0.7.0
+# Version: 0.7.0-SNAPSHOT
 #
 
 param(
@@ -10,6 +10,7 @@ param(
     [int]$JVM_GC_PAUSE = $env:JVM_GC_PAUSE,
     [int]$Port = $env:LOOMQ_PORT,
     [string]$ListenHost = $env:LOOMQ_HOST,
+    [string]$NodeId = $env:LOOMQ_NODE_ID,
     [string]$DataDir = $env:LOOMQ_DATA_DIR,
     [switch]$Help
 )
@@ -22,6 +23,7 @@ if (-not $JVM_GC) { $JVM_GC = "ZGC" }
 if (-not $JVM_GC_PAUSE) { $JVM_GC_PAUSE = 10 }
 if (-not $Port) { $Port = 8080 }
 if (-not $ListenHost) { $ListenHost = "0.0.0.0" }
+if (-not $NodeId) { $NodeId = "node-1" }
 if (-not $DataDir) { $DataDir = "./data/wal" }
 
 # Colors
@@ -43,12 +45,13 @@ Parameters:
   -JVM_GC_PAUSE    Max GC pause target in ms (default: 10)
   -Port            Server port (default: 8080)
   -ListenHost      Server host (default: 0.0.0.0)
+  -NodeId          Logical node identifier (default: node-1)
   -DataDir         WAL data directory (default: ./data/wal)
   -Help            Show this help message
 
 Environment Variables:
   All parameters can also be set via environment variables with prefix:
-  JVM_XMS, JVM_XMX, JVM_GC, JVM_GC_PAUSE, LOOMQ_PORT, LOOMQ_HOST, LOOMQ_DATA_DIR
+  JVM_XMS, JVM_XMX, JVM_GC, JVM_GC_PAUSE, LOOMQ_PORT, LOOMQ_HOST, LOOMQ_NODE_ID, LOOMQ_DATA_DIR
 
 Examples:
   # Start with defaults
@@ -133,8 +136,10 @@ function Start-LoomQ {
 
     # System properties
     $sysProps = @(
+        "-Dloomq.node.id=${NodeId}"
         "-Dloomq.server.host=${ListenHost}"
         "-Dloomq.server.port=${Port}"
+        "-Dloomq.data.dir=${DataDir}"
     )
 
     # Add extra properties from environment
@@ -164,7 +169,7 @@ $null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action {
 }
 
 # Main execution
-Write-Info "LoomQ Startup Script v0.7.0"
+Write-Info "LoomQ Startup Script v0.7.0-SNAPSHOT"
 
 Test-Java
 Test-Jar
